@@ -186,26 +186,35 @@ function getOrCreateUser(userId, groupId, username = null, phoneNumber = null) {
   return user;
 }
 
+// Actualiza total_won/total_lost con el resultado NETO de una apuesta.
+// netResult > 0 → ganancia neta (se suma a total_won)
+// netResult < 0 → pérdida neta (se suma a total_lost)
+function updateBetStats(userId, groupId, netResult) {
+  if (netResult > 0) {
+    db.prepare(`UPDATE users SET total_won = total_won + ? WHERE user_id = ? AND group_id = ?`)
+      .run(netResult, userId, groupId);
+  } else if (netResult < 0) {
+    db.prepare(`UPDATE users SET total_lost = total_lost + ? WHERE user_id = ? AND group_id = ?`)
+      .run(Math.abs(netResult), userId, groupId);
+  }
+}
+
 function getUserCredits(userId, groupId) {
   const user = getOrCreateUser(userId, groupId);
   return user.credits;
 }
 
-// ✅ FIX BUG #2: Ahora actualiza total_won y total_lost correctamente
+// updateUserCredits solo maneja el saldo y el historial de transacciones.
+// total_won y total_lost se actualizan por separado con updateBetStats().
 function updateUserCredits(userId, groupId, amount, type, description) {
   const user = getOrCreateUser(userId, groupId);
   const newBalance = user.credits + amount;
-  
-  let wonDelta = 0;
-  let lostDelta = 0;
-  if (type === 'win') wonDelta = amount;
-  if (type === 'bet') lostDelta = Math.abs(amount); // amount es negativo en bets
 
   db.prepare(`
     UPDATE users 
-    SET credits = ?, total_won = total_won + ?, total_lost = total_lost + ?
+    SET credits = ?
     WHERE user_id = ? AND group_id = ?
-  `).run(newBalance, wonDelta, lostDelta, userId, groupId);
+  `).run(newBalance, userId, groupId);
   
   db.prepare(`
     INSERT INTO transactions (user_id, group_id, type, amount, description, balance_after)
@@ -260,6 +269,19 @@ function getActiveGame(groupId) {
     ORDER BY started_at DESC 
     LIMIT 1
   `).get(groupId);
+}
+
+function getClosingGame(groupId) {
+  return db.prepare(`
+    SELECT * FROM games 
+    WHERE group_id = ? AND status IN ('active', 'closing')
+    ORDER BY started_at DESC 
+    LIMIT 1
+  `).get(groupId);
+}
+
+function closeGame(gameId) {
+  db.prepare(`UPDATE games SET status = 'closing' WHERE id = ?`).run(gameId);
 }
 
 function completeGame(gameId, winningNumber, winningColor) {
@@ -485,13 +507,16 @@ module.exports = {
   updateGroupSettings,
   getOrCreateUser,
   getUserCredits,
+  updateBetStats,
   updateUserCredits,
   resetWeeklyCredits,
   getTopUsers,
   getUserCount,
   createGame,
   getActiveGame,
+  closeGame,
   completeGame,
+  getClosingGame,
   placeBet,
   getGameBets,
   getUserBets,

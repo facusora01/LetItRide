@@ -3,7 +3,7 @@ const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
 const cron = require("node-cron");
 const db = require("./database");
-const { handleCommand, handlePollReaction, launchGame } = require("./commands");
+const { handleCommand, handlePollReaction, handleBetReaction, launchGame } = require("./commands");
 
 // ─── CONFIGURACIÓN ────────────────────────────────────────────────────────────
 const GAME_SCHEDULE = process.env.GAME_SCHEDULE || "20:00";
@@ -99,6 +99,7 @@ client.on("ready", () => {
 // ─── LISTENER DE REACCIONES (para el poll de /casino start) ──────────────────
 client.on("message_reaction", async (reaction) => {
   try {
+    await handleBetReaction(reaction, client);
     await handlePollReaction(reaction, client);
   } catch (err) {
     console.error("❌ Error en message_reaction:", err.message);
@@ -116,7 +117,7 @@ async function processMessage(message) {
     if (!from.endsWith("@g.us") && !from.endsWith("@lid")) return;
 
     const lowerBody = body.toLowerCase();
-    const validCommands = ["/casino", "/bet", "/balance", "/top", "/history", "/spin", "/stop", "/admin", "si", "sí", "yes", "no"];
+    const validCommands = ["/casino", "/bet", "/balance", "/top", "/history", "/spin", "/stop", "/admin"];
     if (!validCommands.some(cmd => lowerBody.startsWith(cmd))) return;
 
     const logBody = body.length > 100 ? body.slice(0, 100) + "..." : body;

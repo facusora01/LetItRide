@@ -176,14 +176,13 @@ console.log(`\n${B}══ SUITE 3: /bet sintaxis ══${X}`);
 test("/bet 500 7 → válido", () => assertValid("/bet 500 7"));
 test("/bet 200 rojo par → válido", () => assertValid("/bet 200 rojo par"));
 test("/bet 100 3 15 22 d1 → válido", () => assertValid("/bet 100 3 15 22 d1"));
-test("/bet 1000 c1 c2 c3 rojo negro par impar d1 d2 → válido (10 targets)", () =>
-  assertValid("/bet 1000 c1 c2 c3 rojo negro par impar d1 d2")
+test("/bet rojo negro par impar altos bajos d1 d2 d3 c1 c2 c3 → válido (12 targets)", () =>
+  assertValid("/bet 2000 rojo negro par impar altos bajos d1 d2 d3 c1 c2 c3")
 );
 test("/bet sola → inválido (solo 1 parte)", () => assertInvalid("/bet"));
 test("/bet 500 → inválido (solo 2 partes, falta target)", () => assertInvalid("/bet 500"));
-test("/bet con 21 tokens → inválido (supera max=20)", () => {
-  const tokens = "/bet 100 " + Array.from({length: 19}, (_, i) => i % 37).join(" ");
-  assertInvalid(tokens);
+test("/bet con 16 targets → inválido (supera MAX_BET_TARGETS=15)", () => {
+  assertInvalid("/bet 100 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16"); // 16 targets > 15 máx
 });
 test("/bet cuerpo muy largo → inválido", () => assertInvalid("/bet " + "500 ".repeat(30)));
 test("/bet con SQL injection → inválido por longitud", () =>
@@ -197,6 +196,43 @@ test("/bet con null bytes → inválido", () =>
 );
 test("/bet con emoji flood → inválido", () =>
   assertInvalid("/bet 500 " + "🎰".repeat(20))
+);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SUITE 3b — Mínimos por categoría y límite de targets
+// ═══════════════════════════════════════════════════════════════════════════════
+console.log(`\n${B}══ SUITE 3b: Mínimos por categoría y max targets ══${X}`);
+
+// Extraer BET_MINIMUMS y MAX_BET_TARGETS del módulo
+const srcFull = require("fs").readFileSync("./commands.js", "utf8");
+const betMinsMatch = srcFull.match(/const BET_MINIMUMS\s*=\s*\{[\s\S]*?\};/)[0];
+const maxTargetsMatch = srcFull.match(/const MAX_BET_TARGETS\s*=\s*(\d+);/)[1];
+const MAX_BET_TARGETS = parseInt(maxTargetsMatch);
+const BET_MINIMUMS = new Function(betMinsMatch + "; return BET_MINIMUMS;")();
+
+test(`MAX_BET_TARGETS = 15`, () => assert(MAX_BET_TARGETS === 15));
+test("Mínimo número = 100",   () => assert(BET_MINIMUMS['number']  === 100));
+test("Mínimo rojo = 2000",    () => assert(BET_MINIMUMS['red']     === 2000));
+test("Mínimo negro = 2000",   () => assert(BET_MINIMUMS['black']   === 2000));
+test("Mínimo par = 2000",     () => assert(BET_MINIMUMS['even']    === 2000));
+test("Mínimo impar = 2000",   () => assert(BET_MINIMUMS['odd']     === 2000));
+test("Mínimo altos = 1000",   () => assert(BET_MINIMUMS['high']    === 1000));
+test("Mínimo bajos = 1000",   () => assert(BET_MINIMUMS['low']     === 1000));
+test("Mínimo d1 = 500",       () => assert(BET_MINIMUMS['dozen1']  === 500));
+test("Mínimo d2 = 500",       () => assert(BET_MINIMUMS['dozen2']  === 500));
+test("Mínimo d3 = 500",       () => assert(BET_MINIMUMS['dozen3']  === 500));
+test("Mínimo c1 = 500",       () => assert(BET_MINIMUMS['column1'] === 500));
+test("Mínimo c2 = 500",       () => assert(BET_MINIMUMS['column2'] === 500));
+test("Mínimo c3 = 500",       () => assert(BET_MINIMUMS['column3'] === 500));
+test("Todas las categorías tienen mínimo definido", () => {
+  const types = ['number','red','black','even','odd','high','low','dozen1','dozen2','dozen3','column1','column2','column3'];
+  types.forEach(t => assert(BET_MINIMUMS[t] !== undefined, `Falta mínimo para: ${t}`));
+});
+test("/bet con 12 targets → válido (dentro del límite de 15)", () =>
+  assertValid("/bet 2000 rojo negro par impar altos bajos d1 d2 d3 c1 c2 c3")
+);
+test("/bet con 16 targets → inválido (supera límite de 15)", () =>
+  assertInvalid("/bet 100 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15")
 );
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -250,17 +286,33 @@ test("'odd' → null (inglés no aceptado)", () => assertTargetInvalid("odd"));
 test("'high' → null (inglés no aceptado)", () => assertTargetInvalid("high"));
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SUITE 6 — Confirmaciones (si/no/yes)
+// SUITE 6 — Confirmación de apuesta por reacción
 // ═══════════════════════════════════════════════════════════════════════════════
-console.log(`\n${B}══ SUITE 6: Confirmaciones ══${X}`);
+console.log(`\n${B}══ SUITE 6: Confirmación por reacción ══${X}`);
 
-test("'si' solo → válido", () => assertValid("si"));
-test("'sí' solo → válido", () => assertValid("sí"));
-test("'yes' solo → válido", () => assertValid("yes"));
-test("'no' solo → válido", () => assertValid("no"));
-test("'si argumento' → inválido", () => assertInvalid("si algo"));
-test("'yes argumento' → inválido", () => assertInvalid("yes please"));
-test("'no argumento' → inválido", () => assertInvalid("no gracias"));
+test("handleBetReaction está exportado", () => {
+  // Verificar que el export existe sin instanciar el módulo completo
+  const src = require("fs").readFileSync("./commands.js", "utf8");
+  assert(src.includes("handleBetReaction"), "handleBetReaction no encontrado en commands.js");
+  assert(src.includes("module.exports = { handleCommand, handlePollReaction, handleBetReaction"), "handleBetReaction no está en module.exports");
+});
+test("pendingBets guarda msgId del mensaje de confirmación", () => {
+  const src = require("fs").readFileSync("./commands.js", "utf8");
+  assert(src.includes("msgId: previewMsgId"), "pendingBets debe guardar msgId");
+});
+test("Solo reacciones 👍 y 👎 son procesadas", () => {
+  const src = require("fs").readFileSync("./commands.js", "utf8");
+  assert(src.includes("['👍', '👎'].includes(reaction.reaction)"), "Debe filtrar solo 👍 y 👎");
+});
+test("Solo el apostante original puede confirmar", () => {
+  const src = require("fs").readFileSync("./commands.js", "utf8");
+  assert(src.includes("if (reactorId !== betUserId) return"), "Debe rechazar reacciones de otros usuarios");
+});
+test("si/yes/no ya no están en COMMAND_RULES", () => {
+  const src = require("fs").readFileSync("./commands.js", "utf8");
+  assert(!src.includes('"si":       [1, 1]'), 'si no debe estar en COMMAND_RULES');
+  assert(!src.includes('"yes":      [1, 1]'), 'yes no debe estar en COMMAND_RULES');
+});
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SUITE 7 — Inyección de código / entradas maliciosas
@@ -340,8 +392,8 @@ test("/admin resumen extra → inválido (3 partes > max=2)", () =>
 test("COMMAND_MAX_LENGTH['/casino'] = 30", () =>
   assert(COMMAND_MAX_LENGTH["/casino"] === 30)
 );
-test("COMMAND_MAX_LENGTH['/bet'] = 80", () =>
-  assert(COMMAND_MAX_LENGTH["/bet"] === 80)
+test("COMMAND_MAX_LENGTH['/bet'] = 100", () =>
+  assert(COMMAND_MAX_LENGTH["/bet"] === 100)
 );
 test("VALID_SUBCOMMANDS tiene exactamente 10 entradas", () =>
   assert(VALID_SUBCOMMANDS.length === 10, `Tiene ${VALID_SUBCOMMANDS.length} en lugar de 10`)
@@ -356,6 +408,71 @@ test("Todos los keywords del KEYWORD_MAP tienen valor interno válido", () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // RESUMEN
 // ═══════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+// SUITE — Envío de Stickers
+// ═══════════════════════════════════════════════════════════════════════════════
+console.log(`\n${B}══ SUITE: Envío de Stickers ══${X}`);
+
+{
+  // Tests de archivo — solo corren si la carpeta Stickers está presente
+  const _path = require("path");
+  const _fs = require("fs");
+  const stickerDir = _path.join(__dirname, "Stickers");
+  const stickerFile = _path.join(stickerDir, "LetItRide!!.20");
+  const stickerPresent = _fs.existsSync(stickerDir) && _fs.existsSync(stickerFile);
+
+  if (!stickerPresent) {
+    console.log(`${Y} Carpeta ./Stickers no encontrada — tests de archivo salteados.${X}`);
+    console.log(`${Y} Copiá el sticker al servidor para ejecutarlos.${X}`);
+  }
+
+  test("Carpeta Stickers existe", () => {
+    if (!stickerPresent) { console.log("     (salteado — carpeta no presente)"); return; }
+    assert(fs.existsSync(stickerDir), "No existe la carpeta ./Stickers");
+  });
+  test("Archivo de sticker existe", () => {
+    if (!stickerPresent) { console.log("     (salteado — archivo no presente)"); return; }
+    assert(fs.existsSync(stickerFile), `No existe: ${stickerFile}`);
+  });
+  test("Archivo de sticker no está vacío", () => {
+    if (!stickerPresent) { console.log("     (salteado)"); return; }
+    assert(fs.statSync(stickerFile).size > 0, "El sticker está vacío");
+  });
+  test("Archivo de sticker es un WebP válido (header RIFF...WEBP)", () => {
+    if (!stickerPresent) { console.log("     (salteado)"); return; }
+    const buf = Buffer.alloc(12);
+    const fd = fs.openSync(stickerFile, "r");
+    fs.readSync(fd, buf, 0, 12, 0);
+    fs.closeSync(fd);
+    assert(buf.slice(0,4).toString("ascii") === "RIFF" && buf.slice(8,12).toString("ascii") === "WEBP",
+      `No es WebP válido (header: ${buf.slice(0,12).toString("hex")})`);
+  });
+}
+test("spinAndReport envía sticker antes del resultado", () => {
+  const src = fs.readFileSync("./commands.js", "utf8");
+  assert(src.includes("sendMediaAsSticker: true"), "No se encontró sendMediaAsSticker en spinAndReport");
+  assert(src.includes("MessageMedia.fromFilePath"), "No se encontró MessageMedia.fromFilePath");
+  assert(src.includes("La ruleta está girando"), "No se encontró mensaje de transición");
+  // Verificar orden: sticker antes que spinRoulette
+  const stickerIdx = src.indexOf("sendMediaAsSticker");
+  const spinIdx = src.indexOf("db.spinRoulette()");
+  assert(stickerIdx < spinIdx, "El sticker debe enviarse ANTES de llamar a spinRoulette()");
+});
+test("MessageMedia importado en commands.js", () => {
+  const src = fs.readFileSync("./commands.js", "utf8");
+  assert(src.includes('const { MessageMedia }'), "MessageMedia no está importado");
+});
+test("Ruta del sticker usa path.join (portable)", () => {
+  const src = fs.readFileSync("./commands.js", "utf8");
+  assert(src.includes('path.join(__dirname, "Stickers"'), 'La ruta debe usar path.join(__dirname, "Stickers")');
+});
+test("Error de sticker es silencioso — no rompe el flujo", () => {
+  const src = fs.readFileSync("./commands.js", "utf8");
+  // Debe haber un try/catch alrededor del envío del sticker
+  const stickerBlock = src.slice(src.indexOf("sendMediaAsSticker"), src.indexOf("La ruleta está girando"));
+  assert(stickerBlock.includes("catch"), "El envío del sticker debe estar dentro de un try/catch");
+});
+
 console.log(`\n${"─".repeat(50)}`);
 console.log(`📊 Resultados: ${passed}/${total} pasados`);
 if (failed > 0) {

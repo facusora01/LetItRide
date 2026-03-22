@@ -1,5 +1,7 @@
 const db = require("./database");
 const { exec } = require("child_process");
+const { MessageMedia } = require("whatsapp-web.js");
+const path = require("path");
 
 const CREDIT_DAY = parseInt(process.env.CREDIT_DAY) || 5;
 const DAY_NAMES = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
@@ -15,21 +17,20 @@ const HELP_TEXT = `
 ▸ \`/bet <monto> <objetivo...>\` — Apostar
 
 *💡 Cómo apostar:*
-Monto mínimo: 100 créditos (3+ dígitos)
-El monto se cobra por cada objetivo.
+El monto se cobra por cada objetivo. Máx. 15 objetivos por /bet.
+
+*💰 Mínimos por tipo:*
+• Número (0-36): 100 créditos → paga 35:1
+• Rojo / Negro: 2.000 → paga 1:1
+• Par / Impar: 2.000 → paga 1:1
+• Altos / Bajos: 1.000 → paga 1:1
+• Docenas (d1/d2/d3): 500 → paga 2:1
+• Columnas (c1/c2/c3): 500 → paga 2:1
 
 Ejemplos:
 ▸ \`/bet 500 7\` — 500 al número 7
-▸ \`/bet 200 rojo par\` — 200 a rojo Y 200 a par (total: 400)
-▸ \`/bet 100 3 15 22 d1\` — 100 a cada uno (total: 400)
-
-*🎯 Objetivos disponibles:*
-• Números: 0 al 36 → paga 35:1
-• \`rojo\` / \`negro\` → paga 1:1
-• \`par\` / \`impar\` → paga 1:1
-• \`altos\` (19-36) / \`bajos\` (1-18) → paga 1:1
-• \`d1\` (1-12) / \`d2\` (13-24) / \`d3\` (25-36) → paga 2:1
-• \`c1\` / \`c2\` / \`c3\` (columnas) → paga 2:1
+▸ \`/bet 2000 rojo par\` — a rojo Y par (total: 4.000)
+▸ \`/bet 1000 3 15 d1\` — a tres objetivos (total: 3.000)
 
 *💰 Cuenta:*
 ▸ \`/balance\` — Ver tus créditos
@@ -134,6 +135,26 @@ function parseTarget(token) {
   return null;
 }
 
+// ─── MÍNIMOS POR CATEGORÍA DE APUESTA ────────────────────────────────────────
+const BET_MINIMUMS = {
+  'number':  100,   // números 0-36
+  'even':    2000,  // par
+  'odd':     2000,  // impar
+  'red':     2000,  // rojo
+  'black':   2000,  // negro
+  'dozen1':  500,   // d1
+  'dozen2':  500,   // d2
+  'dozen3':  500,   // d3
+  'column1': 500,   // c1
+  'column2': 500,   // c2
+  'column3': 500,   // c3
+  'high':    1000,  // altos
+  'low':     1000,  // bajos
+};
+
+// Máximo de objetivos distintos por comando /bet
+const MAX_BET_TARGETS = 15;
+
 // ─── VALIDADORES DE COMANDOS ──────────────────────────────────────────────────
 // ─── SUBCOMANDOS VÁLIDOS DE /casino ─────────────────────────────────────────
 const VALID_SUBCOMMANDS = ["help", "add", "remove", "status", "start", "reset", "config", "schedule", "days", "credits"];
@@ -145,11 +166,7 @@ const COMMAND_RULES = {
   "/spin":    [1, 1],
   "/stop":    [1, 1],
   "/casino":  [2, 4],
-  "/bet":     [3, 20],
-  "si":       [1, 1],
-  "sí":       [1, 1],
-  "yes":      [1, 1],
-  "no":       [1, 1],
+  "/bet":     [3, 17], // cmd + monto + hasta MAX_BET_TARGETS=15 targets
   "/admin":   [1, 2],
 };
 
@@ -161,7 +178,7 @@ const COMMAND_MAX_LENGTH = {
   "/spin":    5,
   "/stop":    5,
   "/casino":  30,  // "/casino schedule 20:00" = 22 chars, damos margen
-  "/bet":     80,  // "/bet 50000 rojo negro par impar d1 d2 d3 c1 c2" cabe bien
+  "/bet":     100, // "/bet 50000 rojo negro par impar altos bajos d1 d2 d3 c1 c2 c3 7 15" ≈ 15 targets
   "/admin":   20,
 };
 
@@ -172,29 +189,40 @@ function validateCommand(parts) {
 
   const fullBody = parts.join(" ");
 
-  // 1. Rechazar null bytes y caracteres de control (excepto espacios/tabs normales)
+  // ── FAIL-FAST: longitud primero ───────────────────────────────────────────
+  // Si el cuerpo supera el límite, abortamos ANTES de cualquier regex o loop.
+  // Esto evita que strings enormes pasen por todos los checks.
+  const maxLen = COMMAND_MAX_LENGTH[cmd];
+  if (maxLen && fullBody.length > maxLen) return false;
+
+  // ── FAIL-FAST: cantidad de partes ─────────────────────────────────────────
+  // Si tiene demasiados o muy pocos tokens, no tiene sentido seguir validando.
+  const [min, max] = rule;
+  if (parts.length < min || parts.length > max) return false;
+
+  // A partir de acá el mensaje tiene tamaño y forma válidos.
+  // Ahora buscamos contenido malicioso.
+
+  // 1. Rechazar null bytes y caracteres de control
   for (let i = 0; i < fullBody.length; i++) {
     const code = fullBody.charCodeAt(i);
     if (code === 0 || (code >= 1 && code <= 8) || (code >= 11 && code <= 31) || code === 127) return false;
   }
 
   // 2. Rechazar caracteres Unicode peligrosos (RTL override, zero-width, BOM)
-  if (/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/.test(fullBody)) return false;
+  if (/[​-‏‪-‮⁠-⁤﻿]/.test(fullBody)) return false;
 
-  // 3. Rechazar emoji flood — si los bytes UTF-8 superan 3x el número de chars
+  // 3. Rechazar emoji flood — bytes UTF-8 > 1.5× largo en chars
   if (Buffer.byteLength(fullBody, "utf8") > fullBody.length * 1.5) return false;
 
-  // 4. Rechazar HTML/JS injection (aplica a todos los comandos)
+  // 4. Rechazar HTML/JS injection
   if (/<|>|javascript\s*:|on[a-z]+\s*=/i.test(fullBody)) return false;
 
-  // 5. Rechazar inyección de shell y path traversal (aplica a /casino y /bet)
+  // 5. Rechazar shell injection y path traversal (solo /casino y /bet)
   if (cmd === "/casino" || cmd === "/bet") {
     const args = fullBody.slice(cmd.length);
-    // Shell: backtick, $, ;, |, &, {}, (), [], comillas, backslash
-    if (/[`$;|&{}()\[\]'"\\]/.test(args)) return false;
-    // Path traversal
+    if (/[`$;|&{}()[\]'"\\]/.test(args)) return false;
     if (/\.\./.test(args)) return false;
-    // SQL: -- seguido de cualquier cosa, o palabras clave SQL
     if (/--|(?:UNION|SELECT|DROP|INSERT|UPDATE|DELETE|ALTER|FROM|WHERE)\s/i.test(args)) return false;
   }
 
@@ -203,13 +231,7 @@ function validateCommand(parts) {
     if (parts.some(p => /^\d{16,}$/.test(p))) return false;
   }
 
-  // 7. Verificar longitud total del cuerpo
-  const maxLen = COMMAND_MAX_LENGTH[cmd];
-  if (maxLen && fullBody.length > maxLen) return false;
-
-  // 8. Verificar cantidad de partes
-  const [min, max] = rule;
-  return parts.length >= min && parts.length <= max;
+  return true;
 }
 
 // ─── POLL DE VOTACIÓN ─────────────────────────────────────────────────────────
@@ -218,6 +240,69 @@ const pendingPolls = new Map();
 // ─── CONFIRMACIONES DE APUESTA PENDIENTES ─────────────────────────────────────
 // Map: userId → { groupId, gameId, amount, parsedTargets, totalCost, timeoutId }
 const pendingBets = new Map();
+
+// ─── CONFIRMACIÓN DE APUESTA POR REACCIÓN ────────────────────────────────────
+async function handleBetReaction(reaction, client) {
+  try {
+    const msgId = reaction.msgId?._serialized;
+    if (!msgId) return;
+
+    // Buscar si esta reacción corresponde a alguna apuesta pendiente
+    for (const [betUserId, pending] of pendingBets.entries()) {
+      if (pending.msgId !== msgId) continue;
+
+      // Solo acepta reacción del apostante original
+      const reactorId = reaction.senderId;
+      if (reactorId !== betUserId) return;
+
+      // Solo 👍 y 👎
+      if (!['👍', '👎'].includes(reaction.reaction)) return;
+
+      clearTimeout(pending.timeoutId);
+      pendingBets.delete(betUserId);
+
+      const { groupId, gameId, amount, parsedTargets, totalCost } = pending;
+
+      if (reaction.reaction === '👎') {
+        await client.sendMessage(groupId, `❌ Apuesta cancelada. Tus créditos no fueron afectados.`);
+        return;
+      }
+
+      // 👍 — confirmar apuesta
+      const currentGame = db.getActiveGame(groupId);
+      if (!currentGame || currentGame.id !== gameId) {
+        await client.sendMessage(groupId, `❌ El juego ya no está activo. Apuesta cancelada.`);
+        return;
+      }
+
+      const user = db.getOrCreateUser(betUserId, groupId);
+      if (user.credits < totalCost) {
+        await client.sendMessage(groupId,
+          `❌ Ya no tenés créditos suficientes.\nNecesitás: ${formatCredits(totalCost)}\nTenés: ${formatCredits(user.credits)}`
+        );
+        return;
+      }
+
+      let newBalance = db.updateUserCredits(betUserId, groupId, -totalCost, 'bet',
+        `Apuesta (${parsedTargets.length} objetivo${parsedTargets.length > 1 ? 's' : ''})`);
+
+      for (const t of parsedTargets) {
+        db.placeBet(gameId, betUserId, t.betType, t.betValue, amount);
+      }
+
+      let confirmMsg = `✅ *Apuesta confirmada*\n\n`;
+      confirmMsg += `💰 ${formatCredits(amount)} × ${parsedTargets.length} = ${formatCredits(totalCost)}\n\n`;
+      confirmMsg += `*Tus apuestas:*\n`;
+      parsedTargets.forEach(t => { confirmMsg += `  • ${formatBetType(t.betType, t.betValue)}\n`; });
+      confirmMsg += `\n💳 Saldo restante: ${formatCredits(newBalance)}\n🎰 ¡Buena suerte!`;
+
+      await client.sendMessage(groupId, confirmMsg);
+      return;
+    }
+  } catch (err) {
+    console.error("❌ Error en handleBetReaction:", err.message);
+  }
+}
 
 async function handlePollReaction(reaction, client) {
   try {
@@ -281,7 +366,28 @@ async function launchGame(client, groupId, groupName) {
       `¡Buena suerte!`
     );
 
-    setTimeout(() => spinAndReport(client, groupId, game.id), 2 * 60 * 1000);
+    // Aviso 30 segundos antes del cierre
+    setTimeout(async () => {
+      const stillActive = db.getActiveGame(groupId);
+      if (stillActive && stillActive.id === game.id) {
+        await client.sendMessage(groupId,
+          `⏰ *¡30 segundos para cerrar apuestas!* ⚠️
+
+Última chance para apostar antes de que gire la ruleta.`
+        );
+      }
+    }, 90 * 1000); // 1:30 min
+
+    // Girar al cumplirse los 2 minutos
+    setTimeout(async () => {
+      const stillActive = db.getActiveGame(groupId);
+      if (stillActive && stillActive.id === game.id) {
+        // Marcar el juego como 'closing' para bloquear nuevas apuestas
+        db.closeGame(game.id);
+        await client.sendMessage(groupId, `🚫 *¡Las apuestas están cerradas!* No se aceptan más \`/bet\`.\n\n🎰 Girando la ruleta...`);
+      }
+      await spinAndReport(client, groupId, game.id);
+    }, 2 * 60 * 1000);
   } catch (err) {
     console.error(`❌ Error en launchGame para ${groupName}:`, err.message);
   }
@@ -290,8 +396,26 @@ async function launchGame(client, groupId, groupName) {
 // ─── SPIN + RESULTADOS ────────────────────────────────────────────────────────
 async function spinAndReport(client, groupId, gameId) {
   try {
-    const activeGame = db.getActiveGame(groupId);
+    const activeGame = db.getClosingGame(groupId);
     if (!activeGame || activeGame.id !== gameId) return;
+
+    // 1. Enviar sticker de ruleta girando
+    try {
+      const stickerPath = path.join(__dirname, "Stickers", "LetItRide!!.20");
+      const stickerData = require("fs").readFileSync(stickerPath).toString("base64");
+      const media = new MessageMedia("image/webp", stickerData);
+      await client.sendMessage(groupId, media, { sendMediaAsSticker: true });
+    } catch (stickerErr) {
+      console.warn("⚠️ No se pudo enviar el sticker:", stickerErr.message);
+    }
+
+    await new Promise(r => setTimeout(r, 5000));
+
+    // 2. Mensaje de transición
+    await client.sendMessage(groupId, "🎰 *La ruleta está girando...* 🌀");
+
+    // Pequeña pausa dramática
+    await new Promise(r => setTimeout(r, 10000));
 
     const result = db.spinRoulette();
     db.completeGame(activeGame.id, result.number, result.color);
@@ -303,12 +427,17 @@ async function spinAndReport(client, groupId, gameId) {
     for (const bet of bets) {
       const multiplier = db.calculateBetPayout(bet.bet_type, bet.bet_value, result.number, result.color);
       const winAmount = multiplier * bet.amount;
+      const netResult = winAmount - bet.amount; // neto: lo que ganó/perdió realmente
+
       if (winAmount > 0) {
+        // Acreditar la ganancia bruta al saldo
         db.updateUserCredits(bet.user_id, groupId, winAmount, 'win',
           `Ganancia - ${formatBetType(bet.bet_type, bet.bet_value)}`);
-        winners.push({ username: bet.username, amount: winAmount, bet: formatBetType(bet.bet_type, bet.bet_value) });
+        winners.push({ username: bet.username, amount: netResult, bet: formatBetType(bet.bet_type, bet.bet_value) });
         totalPayout += winAmount;
       }
+      // Registrar el resultado neto en los stats
+      db.updateBetStats(bet.user_id, groupId, netResult);
       db.updateBetStatus(bet.id, winAmount, winAmount > 0 ? 'won' : 'lost');
     }
 
@@ -584,8 +713,13 @@ async function handleCommand(message, client) {
       if (!group || !group.active)
         return message.reply("❌ El casino no está activo en este grupo.");
       const activeGame = db.getActiveGame(groupId);
-      if (!activeGame)
+      if (!activeGame) {
+        // Verificar si hay un juego cerrando apuestas
+        const closingGame = db.getClosingGame(groupId);
+        if (closingGame)
+          return message.reply("🚫 Las apuestas ya cerraron para esta ronda. ¡Esperá la próxima!");
         return message.reply("🎰 No hay ningún juego activo. Esperá a que inicie una ronda.");
+      }
 
       const args = parts.slice(1);
       const amountStr = args.find(a => /^\d{3,}$/.test(a));
@@ -617,8 +751,6 @@ async function handleCommand(message, client) {
       const settings = db.getGroupSettings(groupId);
       const minBet = settings?.min_bet || 100;
 
-      if (amount < minBet)
-        return message.reply(`❌ El monto mínimo por objetivo es ${formatCredits(minBet)}.`);
 
       if (user.credits < totalCost)
         return message.reply(
@@ -638,16 +770,21 @@ async function handleCommand(message, client) {
       parsedTargets.forEach(t => { preview += `  • ${formatBetType(t.betType, t.betValue)}\n`; });
       preview += `\n💳 Saldo actual: ${formatCredits(user.credits)}`;
       preview += `\n💳 Saldo si confirmás: ${formatCredits(user.credits - totalCost)}`;
-      preview += `\n\n¿Confirmás? Respondé *si* / *yes* para apostar o *no* para cancelar.`;
+      preview += `\n\n👍 Confirmar  |  👎 Cancelar`;
       preview += `\n_(Expira en 60 segundos)_`;
 
+      // Enviar mensaje y guardar su ID para escuchar la reacción
+      const previewMsg = await message.reply(preview);
+      const previewMsgId = previewMsg.id._serialized;
+
       // Guardar apuesta pendiente con timeout de 60s
-      const timeoutId = setTimeout(() => {
+      const timeoutId = setTimeout(async () => {
         if (pendingBets.has(userId)) {
           pendingBets.delete(userId);
-          // No podemos hacer reply acá porque no tenemos el message object,
-          // así que solo lo limpiamos silenciosamente
           console.log(`⏰ Apuesta pendiente expirada para ${userId}`);
+          try {
+            await client.sendMessage(groupId, `⏰ @${userId.split('@')[0].split(':')[0]} Tu apuesta expiró sin confirmar.`);
+          } catch (e) {}
         }
       }, 60 * 1000);
 
@@ -658,52 +795,10 @@ async function handleCommand(message, client) {
         parsedTargets,
         totalCost,
         timeoutId,
+        msgId: previewMsgId,
       });
 
-      return message.reply(preview);
-    }
-
-    // ─── CONFIRMACIÓN DE APUESTA (si/yes/no) ─────────────────────────────────
-    if (["si", "sí", "yes", "no"].includes(command)) {
-      if (!pendingBets.has(userId)) return; // No hay nada pendiente, ignorar
-
-      const pending = pendingBets.get(userId);
-      pendingBets.delete(userId);
-      clearTimeout(pending.timeoutId);
-
-      // Verificar que sea el mismo grupo y el mismo juego
-      if (pending.groupId !== groupId)
-        return message.reply("❌ La apuesta pendiente era para otro grupo.");
-
-      const currentGame = db.getActiveGame(groupId);
-      if (!currentGame || currentGame.id !== pending.gameId)
-        return message.reply("❌ El juego para el que apostaste ya no está activo. Apuesta cancelada.");
-
-      if (["no"].includes(command)) {
-        return message.reply("❌ Apuesta cancelada. Tus créditos no fueron afectados.");
-      }
-
-      // Confirmar: cobrar y registrar
-      const user = db.getOrCreateUser(userId, groupId, getUserDisplayName(message));
-      if (user.credits < pending.totalCost)
-        return message.reply(
-          `❌ Ya no tenés créditos suficientes.\nNecesitás: ${formatCredits(pending.totalCost)}\nTenés: ${formatCredits(user.credits)}`
-        );
-
-      let newBalance = db.updateUserCredits(userId, groupId, -pending.totalCost, 'bet',
-        `Apuesta (${pending.parsedTargets.length} objetivo${pending.parsedTargets.length > 1 ? 's' : ''})`);
-
-      for (const t of pending.parsedTargets) {
-        db.placeBet(pending.gameId, userId, t.betType, t.betValue, pending.amount);
-      }
-
-      let confirmMsg = `✅ *Apuesta confirmada*\n\n`;
-      confirmMsg += `💰 ${formatCredits(pending.amount)} × ${pending.parsedTargets.length} = ${formatCredits(pending.totalCost)}\n\n`;
-      confirmMsg += `*Tus apuestas:*\n`;
-      pending.parsedTargets.forEach(t => { confirmMsg += `  • ${formatBetType(t.betType, t.betValue)}\n`; });
-      confirmMsg += `\n💳 Saldo restante: ${formatCredits(newBalance)}\n🎰 ¡Buena suerte!`;
-
-      return message.reply(confirmMsg);
+      return;
     }
 
     // /spin
@@ -854,4 +949,4 @@ async function handleCommand(message, client) {
   }
 }
 
-module.exports = { handleCommand, handlePollReaction, launchGame, spinAndReport };
+module.exports = { handleCommand, handlePollReaction, handleBetReaction, launchGame, spinAndReport };
