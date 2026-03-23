@@ -88,6 +88,17 @@ db.exec(`
 `);
 
 // ─── MIGRACIONES AUTOMÁTICAS ──────────────────────────────────────────────────
+// Resetear stats sucios del sistema viejo (que sumaba el monto apostado a total_lost)
+// Solo corre una vez — detecta si hay valores anómalos (total_lost > total_won * 10)
+try {
+  const dirty = db.prepare(
+    "SELECT COUNT(*) as n FROM users WHERE total_lost > 0 AND total_won = 0"
+  ).get();
+  if (dirty.n > 0) {
+    db.exec("UPDATE users SET total_won = 0, total_lost = 0");
+    console.log("🔧 Migración: stats de ganancia/pérdida reseteados (datos del sistema viejo).");
+  }
+} catch (e) {}
 try {
   db.exec(`ALTER TABLE group_settings ADD COLUMN weekly_credits INTEGER DEFAULT 20000`);
 } catch (e) {}
@@ -199,6 +210,21 @@ function updateBetStats(userId, groupId, netResult) {
   }
 }
 
+// Busca un usuario por número de teléfono (sin importar si es @lid o @c.us)
+// Devuelve el user_id real con el que está registrado, o null si no existe
+function findUserByPhone(phone, groupId) {
+  // Normalizar: sacar todo después de @ y los : de los IDs multi-device
+  const normalized = phone.split('@')[0].split(':')[0];
+  return db.prepare(`
+    SELECT * FROM users 
+    WHERE group_id = ? AND (
+      user_id LIKE ? OR user_id LIKE ?
+    )
+    ORDER BY credits DESC
+    LIMIT 1
+  `).get(groupId, normalized + '@c.us', normalized + '%');
+}
+
 function getUserCredits(userId, groupId) {
   const user = getOrCreateUser(userId, groupId);
   return user.credits;
@@ -238,10 +264,14 @@ function resetWeeklyCredits(groupId) {
 }
 
 function getTopUsers(groupId, limit = 10) {
+  // GROUP BY username para evitar duplicados cuando el mismo jugador
+  // tiene dos filas por distintos formatos de ID (@lid vs @c.us)
   return db.prepare(`
-    SELECT username, credits, total_won, total_lost 
+    SELECT username, MAX(credits) as credits,
+           SUM(total_won) as total_won, SUM(total_lost) as total_lost
     FROM users 
-    WHERE group_id = ? AND credits > 0
+    WHERE group_id = ? AND credits > 0 AND username IS NOT NULL
+    GROUP BY username
     ORDER BY credits DESC 
     LIMIT ?
   `).all(groupId, limit);
@@ -506,6 +536,7 @@ module.exports = {
   getGroupSettings,
   updateGroupSettings,
   getOrCreateUser,
+  findUserByPhone,
   getUserCredits,
   updateBetStats,
   updateUserCredits,

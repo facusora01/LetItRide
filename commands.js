@@ -4,6 +4,8 @@ const { MessageMedia } = require("whatsapp-web.js");
 const path = require("path");
 
 const CREDIT_DAY = parseInt(process.env.CREDIT_DAY) || 5;
+const BET_DURATION = parseInt(process.env.BET_DURATION) || 4; // minutos de apuestas
+const POLL_THRESHOLD = parseFloat(process.env.POLL_THRESHOLD) || 0.2; // % del grupo para votar
 const DAY_NAMES = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
 const creditDayName = DAY_NAMES[CREDIT_DAY];
 
@@ -13,11 +15,10 @@ const HELP_TEXT = `
 
 *🎮 Juegos:*
 ▸ \`/casino start\` — Votación para iniciar ruleta
-▸ \`/spin\` — Girar la ruleta (solo admins)
 ▸ \`/bet <monto> <objetivo...>\` — Apostar
 
 *💡 Cómo apostar:*
-El monto se cobra por cada objetivo. Máx. 15 objetivos por /bet.
+El monto se cobra por cada objetivo. Máx. 15 objetivos por \`/bet\`.
 
 *💰 Mínimos por tipo:*
 • Número (0-36): 100 créditos → paga 35:1
@@ -38,11 +39,10 @@ Ejemplos:
 ▸ \`/history\` — Tus últimas transacciones
 
 *⚙️ Configuración (Solo Admins):*
-▸ \`/casino add\` / \`/casino remove\`
+▸ \`/LetItRide\` — Agregar el casino al grupo
+▸ \`/casino remove\`
 ▸ \`/casino schedule HH:MM\` — Hora del juego automático
 ▸ \`/casino days 1,3,5\` — Días del juego automático
-▸ \`/casino credits <cantidad>\` — Créditos semanales
-▸ \`/casino reset\` — Resetear créditos ahora
 ▸ \`/casino status\` — Estado del casino
 `.trim();
 
@@ -157,15 +157,15 @@ const MAX_BET_TARGETS = 15;
 
 // ─── VALIDADORES DE COMANDOS ──────────────────────────────────────────────────
 // ─── SUBCOMANDOS VÁLIDOS DE /casino ─────────────────────────────────────────
-const VALID_SUBCOMMANDS = ["help", "add", "remove", "status", "start", "reset", "config", "schedule", "days", "credits"];
+const VALID_SUBCOMMANDS = ["help", "add", "remove", "status", "start", "schedule", "days", "give"];
 
 const COMMAND_RULES = {
   "/balance": [1, 1],
   "/top":     [1, 1],
   "/history": [1, 1],
-  "/spin":    [1, 1],
   "/stop":    [1, 1],
-  "/casino":  [2, 4],
+  "/casino":  [2, 5],  // /casino give @user 5000
+  "/letitride": [1, 1],
   "/bet":     [3, 17], // cmd + monto + hasta MAX_BET_TARGETS=15 targets
   "/admin":   [1, 2],
 };
@@ -175,9 +175,9 @@ const COMMAND_MAX_LENGTH = {
   "/balance": 8,
   "/top":     4,
   "/history": 8,
-  "/spin":    5,
   "/stop":    5,
-  "/casino":  30,  // "/casino schedule 20:00" = 22 chars, damos margen
+  "/casino":  50,  // /casino give @user 20000 needs more room
+  "/letitride": 11,
   "/bet":     100, // "/bet 50000 rojo negro par impar altos bajos d1 d2 d3 c1 c2 c3 7 15" ≈ 15 targets
   "/admin":   20,
 };
@@ -237,73 +237,6 @@ function validateCommand(parts) {
 // ─── POLL DE VOTACIÓN ─────────────────────────────────────────────────────────
 const pendingPolls = new Map();
 
-// ─── CONFIRMACIONES DE APUESTA PENDIENTES ─────────────────────────────────────
-// Map: userId → { groupId, gameId, amount, parsedTargets, totalCost, timeoutId }
-const pendingBets = new Map();
-
-// ─── CONFIRMACIÓN DE APUESTA POR REACCIÓN ────────────────────────────────────
-async function handleBetReaction(reaction, client) {
-  try {
-    const msgId = reaction.msgId?._serialized;
-    if (!msgId) return;
-
-    // Buscar si esta reacción corresponde a alguna apuesta pendiente
-    for (const [betUserId, pending] of pendingBets.entries()) {
-      if (pending.msgId !== msgId) continue;
-
-      // Solo acepta reacción del apostante original
-      const reactorId = reaction.senderId;
-      if (reactorId !== betUserId) return;
-
-      // Solo 👍 y 👎
-      if (!['👍', '👎'].includes(reaction.reaction)) return;
-
-      clearTimeout(pending.timeoutId);
-      pendingBets.delete(betUserId);
-
-      const { groupId, gameId, amount, parsedTargets, totalCost } = pending;
-
-      if (reaction.reaction === '👎') {
-        await client.sendMessage(groupId, `❌ Apuesta cancelada. Tus créditos no fueron afectados.`);
-        return;
-      }
-
-      // 👍 — confirmar apuesta
-      const currentGame = db.getActiveGame(groupId);
-      if (!currentGame || currentGame.id !== gameId) {
-        await client.sendMessage(groupId, `❌ El juego ya no está activo. Apuesta cancelada.`);
-        return;
-      }
-
-      const user = db.getOrCreateUser(betUserId, groupId);
-      if (user.credits < totalCost) {
-        await client.sendMessage(groupId,
-          `❌ Ya no tenés créditos suficientes.\nNecesitás: ${formatCredits(totalCost)}\nTenés: ${formatCredits(user.credits)}`
-        );
-        return;
-      }
-
-      let newBalance = db.updateUserCredits(betUserId, groupId, -totalCost, 'bet',
-        `Apuesta (${parsedTargets.length} objetivo${parsedTargets.length > 1 ? 's' : ''})`);
-
-      for (const t of parsedTargets) {
-        db.placeBet(gameId, betUserId, t.betType, t.betValue, amount);
-      }
-
-      let confirmMsg = `✅ *Apuesta confirmada*\n\n`;
-      confirmMsg += `💰 ${formatCredits(amount)} × ${parsedTargets.length} = ${formatCredits(totalCost)}\n\n`;
-      confirmMsg += `*Tus apuestas:*\n`;
-      parsedTargets.forEach(t => { confirmMsg += `  • ${formatBetType(t.betType, t.betValue)}\n`; });
-      confirmMsg += `\n💳 Saldo restante: ${formatCredits(newBalance)}\n🎰 ¡Buena suerte!`;
-
-      await client.sendMessage(groupId, confirmMsg);
-      return;
-    }
-  } catch (err) {
-    console.error("❌ Error en handleBetReaction:", err.message);
-  }
-}
-
 async function handlePollReaction(reaction, client) {
   try {
     const msgId = reaction.msgId?._serialized;
@@ -346,7 +279,7 @@ async function launchGame(client, groupId, groupName) {
   try {
     const existing = db.getActiveGame(groupId);
     if (existing) {
-      await client.sendMessage(groupId, `⚠️ Ya hay un juego activo (#${existing.id}). Terminalo con \`/spin\`.`);
+      await client.sendMessage(groupId, `⚠️ Ya hay un juego activo (#${existing.id}). Esperá a que termine.`);
       return;
     }
     const game = db.createGame(groupId);
@@ -356,12 +289,12 @@ async function launchGame(client, groupId, groupName) {
     await client.sendMessage(groupId,
       `🎰 *PARTIDA INICIADA* 🎲\n\n` +
       `📋 Juego: #${game.id}\n` +
-      `⏰ *2 minutos para apostar*\n` +
+      `⏰ *${BET_DURATION} minutos para apostar*\n` +
       `💰 Mínimo por objetivo: ${formatCredits(minBet)}\n\n` +
       `*Ejemplos:*\n` +
-      `▸ /bet 500 7\n` +
-      `▸ /bet 200 rojo par\n` +
-      `▸ /bet 100 3 15 22\n\n` +
+      `▸ \`/bet 500 7\`\n` +
+      `▸ \`/bet 200 rojo par\`\n` +
+      `▸ \`/bet 100 3 15 22\`\n\n` +
       `🎯 Objetivos: 0-36, rojo, negro, par, impar, altos, bajos, d1/d2/d3, c1/c2/c3\n\n` +
       `¡Buena suerte!`
     );
@@ -376,18 +309,17 @@ async function launchGame(client, groupId, groupName) {
 Última chance para apostar antes de que gire la ruleta.`
         );
       }
-    }, 90 * 1000); // 1:30 min
+    }, (BET_DURATION * 60 - 30) * 1000); // 30s antes del cierre
 
     // Girar al cumplirse los 2 minutos
     setTimeout(async () => {
       const stillActive = db.getActiveGame(groupId);
       if (stillActive && stillActive.id === game.id) {
-        // Marcar el juego como 'closing' para bloquear nuevas apuestas
         db.closeGame(game.id);
         await client.sendMessage(groupId, `🚫 *¡Las apuestas están cerradas!* No se aceptan más \`/bet\`.\n\n🎰 Girando la ruleta...`);
       }
       await spinAndReport(client, groupId, game.id);
-    }, 2 * 60 * 1000);
+    }, BET_DURATION * 60 * 1000);
   } catch (err) {
     console.error(`❌ Error en launchGame para ${groupName}:`, err.message);
   }
@@ -399,6 +331,8 @@ async function spinAndReport(client, groupId, gameId) {
     const activeGame = db.getClosingGame(groupId);
     if (!activeGame || activeGame.id !== gameId) return;
 
+
+    await new Promise(r => setTimeout(r, 5000));
     // 1. Enviar sticker de ruleta girando
     try {
       const stickerPath = path.join(__dirname, "Stickers", "LetItRide!!.20");
@@ -409,7 +343,7 @@ async function spinAndReport(client, groupId, gameId) {
       console.warn("⚠️ No se pudo enviar el sticker:", stickerErr.message);
     }
 
-    await new Promise(r => setTimeout(r, 5000));
+    await new Promise(r => setTimeout(r, 3000));
 
     // 2. Mensaje de transición
     await client.sendMessage(groupId, "🎰 *La ruleta está girando...* 🌀");
@@ -496,7 +430,7 @@ async function handleCommand(message, client) {
     // /balance
     if (command === "/balance") {
       if (!group || !group.active)
-        return message.reply("❌ El casino no está activo. Un admin debe usar `/casino add`.");
+        return message.reply("❌ El casino no está activo. Un admin debe usar `/LetItRide`.");
       const user = db.getOrCreateUser(userId, groupId, getUserDisplayName(message));
       const settings = db.getGroupSettings(groupId);
       return message.reply(
@@ -540,6 +474,25 @@ async function handleCommand(message, client) {
       return message.reply(hist);
     }
 
+    // /LetItRide — agregar casino al grupo (alias de /casino add)
+    if (command === "/letitride") {
+      if (group && group.active)
+        return message.reply('ℹ️ El casino ya está activo en este grupo. Usá `/casino help` para ver los comandos.');
+      const admin = await isAdmin(message, client);
+      if (!admin) return message.reply("🔒 Solo los administradores pueden agregar el casino.");
+      const chat = await message.getChat();
+      db.addGroup(groupId, chat.name);
+      const welcomeMsg =
+        `🎰 *¡Bienvenidos a Let It Ride!* 🎲\n\n` +
+        `El casino está operativo en *${chat.name}*!\n\n` +
+        `💰 Cada jugador recibirá créditos todos los ${creditDayName}.\n` +
+        `🎮 Usá \`/casino help\` para ver todos los comandos.\n\n` +
+        `¡Que comiencen los juegos! 🍀`;
+      try { await message.reply(welcomeMsg); }
+      catch (e) { await client.sendMessage(groupId, welcomeMsg); }
+      return;
+    }
+
     // /casino
     if (command === "/casino") {
       if (!subcommand)
@@ -551,13 +504,13 @@ async function handleCommand(message, client) {
       if (subcommand === "help")
         return message.reply(HELP_TEXT);
 
-      const needsActive = ["status", "config", "schedule", "days", "credits", "reset", "start"];
+      const needsActive = ["status", "schedule", "days", "start"];
       if (needsActive.includes(subcommand) && (!group || !group.active))
-        return message.reply("❌ El casino no está activo. Usá `/casino add` primero.");
+        return message.reply("❌ El casino no está activo. Usá `/LetItRide` primero.");
 
       if (subcommand === "add") {
         if (parts.length !== 2)
-          return message.reply("❌ Uso: `/casino add`  (sin argumentos extra)");
+          return message.reply("💡 Usá `/LetItRide` para agregar el casino al grupo.");
         if (group && group.active)
           return message.reply("ℹ️ El casino ya está activo en este grupo.");
         const admin = await isAdmin(message, client);
@@ -565,10 +518,10 @@ async function handleCommand(message, client) {
         const chat = await message.getChat();
         db.addGroup(groupId, chat.name);
         const welcomeMsg =
-          `🎰 *¡Bienvenidos al LetItRide Casino!* 🎲\n\n` +
+          `🎰 *¡Bienvenidos a Let It Ride!* 🎲\n\n` +
           `El casino está operativo en *${chat.name}*!\n\n` +
           `💰 Cada jugador recibirá créditos todos los ${creditDayName}.\n` +
-          `🎮 Usá /casino help para ver todos los comandos.\n\n` +
+          `🎮 Usá \`/casino help\` para ver todos los comandos.\n\n` +
           `¡Que comiencen los juegos! 🍀`;
         try { await message.reply(welcomeMsg); }
         catch (e) { await client.sendMessage(groupId, welcomeMsg); }
@@ -601,27 +554,10 @@ async function handleCommand(message, client) {
         return message.reply(s);
       }
 
-      const adminCmds = ["config", "schedule", "days", "credits", "reset", "start"];
+      const adminCmds = ["schedule", "days"];
       if (adminCmds.includes(subcommand)) {
         const admin = await isAdmin(message, client);
         if (!admin) return message.reply("🔒 Solo los administradores pueden usar este comando.");
-      }
-
-      if (subcommand === "config") {
-        const key = (parts[2] || "").toLowerCase();
-        const value = parts[3];
-        if (!key || !value)
-          return message.reply("❌ Uso: `/casino config <clave> <valor>`\nClaves: currency, min_bet, auto_payout");
-        const settings = db.getGroupSettings(groupId);
-        const ns = { ...settings };
-        switch (key) {
-          case "currency":    ns.currency = value; break;
-          case "min_bet":     ns.min_bet = parseInt(value); break;
-          case "auto_payout": ns.auto_payout = value === "1" || value === "true"; break;
-          default: return message.reply("❌ Clave inválida. Usá: currency, min_bet, auto_payout");
-        }
-        db.updateGroupSettings(groupId, ns);
-        return message.reply(`✅ Configuración actualizada: ${key} = ${value}`);
       }
 
       if (subcommand === "schedule") {
@@ -642,38 +578,37 @@ async function handleCommand(message, client) {
         return message.reply(`✅ Días de juego actualizados: ${days}`);
       }
 
-      if (subcommand === "credits") {
-        const amount = parseInt(parts[2]);
-        if (!amount || amount < 100)
-          return message.reply("❌ Uso: `/casino credits <cantidad>`  (mínimo 100)");
-        const settings = db.getGroupSettings(groupId);
-        db.updateGroupSettings(groupId, { ...settings, weekly_credits: amount });
-        return message.reply(`✅ Créditos semanales: ${formatCredits(amount)}`);
-      }
-
-      if (subcommand === "reset") {
-        if (parts.length !== 2)
-          return message.reply("❌ Uso: `/casino reset`  (sin argumentos extra)");
-        db.resetWeeklyCredits(groupId);
-        return message.reply("💰 ¡Créditos reseteados! Todos recibieron su saldo semanal.");
-      }
-
       if (subcommand === "start") {
         if (parts.length !== 2)
           return message.reply("❌ Uso: `/casino start`  (sin argumentos extra)");
         if (db.getActiveGame(groupId))
-          return message.reply('🎰 Ya hay un juego activo. Terminalo con `/spin` primero.');
+          return message.reply('🎰 Ya hay un juego activo. Esperá a que termine antes de iniciar otra.');
+
+        // ── SuperAdmin: arrancar sin votación (cancela poll si hay uno) ──────
+        const senderNumber = userId.split('@')[0].split(':')[0];
+        if (SUPER_ADMINS.includes(senderNumber)) {
+          if (pendingPolls.has(groupId)) {
+            const poll = pendingPolls.get(groupId);
+            clearTimeout(poll.timeoutId);
+            pendingPolls.delete(groupId);
+            await client.sendMessage(groupId, `🚫 *Votación cancelada por SuperAdmin.*`);
+          }
+          await client.sendMessage(groupId, `🎰 *¡Partida iniciada por SuperAdmin!* 🎲`);
+          await launchGame(client, groupId, group?.group_name || '');
+          return;
+        }
+
         if (pendingPolls.has(groupId))
           return message.reply(`🗳️ Ya hay una votación en curso.`);
 
         const chat = await message.getChat();
         const totalParticipants = chat.participants?.length || 10;
-        const needed = Math.max(1, Math.ceil(totalParticipants * 0.4));
+        const needed = Math.max(1, Math.ceil(totalParticipants * POLL_THRESHOLD));
 
         const pollMsg = await client.sendMessage(groupId,
           `🗳️ *¿Iniciamos una partida de ruleta?*\n\n` +
           `Reaccioná con 👍 para votar SÍ.\n` +
-          `Se necesitan *${needed} votos* (40% del grupo — ${totalParticipants} participantes).\n\n` +
+          `Se necesitan *${needed} votos* (${Math.round(POLL_THRESHOLD * 100)}% del grupo — ${totalParticipants} participantes).\n\n` +
           `⏰ Tienen *10 minutos* para votar.`
         );
 
@@ -703,6 +638,41 @@ async function handleCommand(message, client) {
         });
 
         return;
+      }
+
+      // /casino give @mention monto — solo SuperAdmin
+      if (subcommand === "give") {
+        const senderNum = userId.split('@')[0].split(':')[0];
+        if (!SUPER_ADMINS.includes(senderNum))
+          return message.reply("⛔ Solo el SuperAdmin puede dar créditos.");
+
+        // El monto es el último token que sea número
+        const giveAmount = parseInt(parts[parts.length - 1]);
+        if (!giveAmount || isNaN(giveAmount) || giveAmount < 1)
+          return message.reply('❌ Uso: `/casino give @usuario <monto>`\nEj: `/casino give @Sora 5000`');
+
+        // Buscar la mención — whatsapp-web.js expone message.mentionedIds
+        const mentioned = message.mentionedIds;
+        if (!mentioned || mentioned.length === 0)
+          return message.reply("❌ Mencioná al usuario con @. Ej: `/casino give @Sora 5000`");
+
+        const rawId = mentioned[0];
+
+        // Buscar al usuario por número, sin importar si está guardado como @lid o @c.us
+        const existingUser = db.findUserByPhone(rawId, groupId);
+        if (!existingUser)
+          return message.reply("❌ Ese usuario nunca interactuó con el bot en este grupo. Pedile que mande `/balance` primero.");
+
+        const realId = existingUser.user_id;
+        const newBalance = db.updateUserCredits(realId, groupId, giveAmount, 'credit', 'Regalo de SuperAdmin');
+        const targetName = existingUser.username || realId.split('@')[0].split(':')[0];
+
+        return message.reply(
+          `💰 *Créditos otorgados*\n\n` +
+          `👤 ${targetName}\n` +
+          `➕ ${formatCredits(giveAmount)}\n` +
+          `💳 Nuevo saldo: ${formatCredits(newBalance)}`
+        );
       }
 
       return message.reply('❓ Subcomando desconocido. Usá `/casino help`.');
@@ -749,67 +719,41 @@ async function handleCommand(message, client) {
       const totalCost = amount * parsedTargets.length;
       const user = db.getOrCreateUser(userId, groupId, getUserDisplayName(message));
       const settings = db.getGroupSettings(groupId);
-      const minBet = settings?.min_bet || 100;
 
+      // ── Mínimos por categoría ──────────────────────────────────────────────
+      const invalidMins = [];
+      for (const t of parsedTargets) {
+        const catMin = BET_MINIMUMS[t.betType] || 100;
+        if (amount < catMin)
+          invalidMins.push(`• ${formatBetType(t.betType, t.betValue)}: mínimo ${formatCredits(catMin)}`);
+      }
+      if (invalidMins.length > 0)
+        return message.reply(
+          `❌ Monto insuficiente para algunos objetivos:\n\n${invalidMins.join("\n")}\n\nTu monto: ${formatCredits(amount)}`
+        );
 
       if (user.credits < totalCost)
         return message.reply(
-          `❌ Créditos insuficientes.\nNecesitás: ${formatCredits(totalCost)}\nTenés: ${formatCredits(user.credits)}`
+          `❌ Créditos insuficientes.\n` +
+          `💸 Esta apuesta cuesta: ${formatCredits(totalCost)}\n` +
+          `💳 Tu saldo: ${formatCredits(user.credits)}`
         );
 
-      // Cancelar confirmación previa si tenía una pendiente
-      if (pendingBets.has(userId)) {
-        clearTimeout(pendingBets.get(userId).timeoutId);
-        pendingBets.delete(userId);
+      // Cobrar y registrar directamente
+      const newBalance = db.updateUserCredits(userId, groupId, -totalCost, 'bet',
+        `Apuesta (${parsedTargets.length} objetivo${parsedTargets.length > 1 ? 's' : ''})`);
+
+      for (const t of parsedTargets) {
+        db.placeBet(activeGame.id, userId, t.betType, t.betValue, amount);
       }
 
-      // Armar resumen de confirmación
-      let preview = `🎲 *Confirmá tu apuesta*\n\n`;
-      preview += `💰 ${formatCredits(amount)} × ${parsedTargets.length} objetivo${parsedTargets.length > 1 ? 's' : ''} = *${formatCredits(totalCost)}*\n\n`;
-      preview += `*Objetivos:*\n`;
-      parsedTargets.forEach(t => { preview += `  • ${formatBetType(t.betType, t.betValue)}\n`; });
-      preview += `\n💳 Saldo actual: ${formatCredits(user.credits)}`;
-      preview += `\n💳 Saldo si confirmás: ${formatCredits(user.credits - totalCost)}`;
-      preview += `\n\n👍 Confirmar  |  👎 Cancelar`;
-      preview += `\n_(Expira en 60 segundos)_`;
+      let confirmMsg = `🎲 *Apuesta registrada*\n\n`;
+      confirmMsg += `💰 ${formatCredits(amount)} × ${parsedTargets.length} = ${formatCredits(totalCost)}\n\n`;
+      confirmMsg += `*Tus apuestas:*\n`;
+      parsedTargets.forEach(t => { confirmMsg += `  • ${formatBetType(t.betType, t.betValue)}\n`; });
+      confirmMsg += `\n💳 Saldo restante: ${formatCredits(newBalance)}\n🎰 ¡Buena suerte!`;
 
-      // Enviar mensaje y guardar su ID para escuchar la reacción
-      const previewMsg = await message.reply(preview);
-      const previewMsgId = previewMsg.id._serialized;
-
-      // Guardar apuesta pendiente con timeout de 60s
-      const timeoutId = setTimeout(async () => {
-        if (pendingBets.has(userId)) {
-          pendingBets.delete(userId);
-          console.log(`⏰ Apuesta pendiente expirada para ${userId}`);
-          try {
-            await client.sendMessage(groupId, `⏰ @${userId.split('@')[0].split(':')[0]} Tu apuesta expiró sin confirmar.`);
-          } catch (e) {}
-        }
-      }, 60 * 1000);
-
-      pendingBets.set(userId, {
-        groupId,
-        gameId: activeGame.id,
-        amount,
-        parsedTargets,
-        totalCost,
-        timeoutId,
-        msgId: previewMsgId,
-      });
-
-      return;
-    }
-
-    // /spin
-    if (command === "/spin") {
-      const admin = await isAdmin(message, client);
-      if (!admin) return message.reply("🔒 Solo los administradores pueden girar la ruleta.");
-      if (!group || !group.active) return message.reply("❌ El casino no está activo.");
-      const activeGame = db.getActiveGame(groupId);
-      if (!activeGame) return message.reply("🎰 No hay ningún juego activo.");
-      await spinAndReport(client, groupId, activeGame.id);
-      return;
+      return message.reply(confirmMsg);
     }
 
     // /admin — solo desde el grupo "Let It Ride", solo para super admins
@@ -949,4 +893,4 @@ async function handleCommand(message, client) {
   }
 }
 
-module.exports = { handleCommand, handlePollReaction, handleBetReaction, launchGame, spinAndReport };
+module.exports = { handleCommand, handlePollReaction, launchGame };
