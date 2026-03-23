@@ -4,8 +4,8 @@ const crypto = require("crypto");
 require("dotenv").config();
 
 // Créditos semanales — configurable desde .env (WEEKLY_AMOUNT=20000)
-const DEFAULT_WEEKLY_CREDITS = parseInt(process.env.WEEKLY_AMOUNT) || 20000;
-const DEFAULT_WELCOME_CREDITS = parseInt(process.env.WELCOME_AMOUNT) || 15000;
+const DEFAULT_WEEKLY_CREDITS = parseInt(process.env.WEEKLY_AMOUNT) || 60000;
+const DEFAULT_WELCOME_CREDITS = parseInt(process.env.WELCOME_AMOUNT) || 100000;
 
 const db = new Database(path.join(__dirname, "letitride_casino.db"));
 
@@ -88,17 +88,27 @@ db.exec(`
 `);
 
 // ─── MIGRACIONES AUTOMÁTICAS ──────────────────────────────────────────────────
-// Resetear stats sucios del sistema viejo (que sumaba el monto apostado a total_lost)
-// Solo corre una vez — detecta si hay valores anómalos (total_lost > total_won * 10)
+// Tabla de control para que cada migración corra solo UNA VEZ
 try {
-  const dirty = db.prepare(
-    "SELECT COUNT(*) as n FROM users WHERE total_lost > 0 AND total_won = 0"
-  ).get();
-  if (dirty.n > 0) {
-    db.exec("UPDATE users SET total_won = 0, total_lost = 0");
-    console.log("🔧 Migración: stats de ganancia/pérdida reseteados (datos del sistema viejo).");
-  }
+  db.exec(`CREATE TABLE IF NOT EXISTS migrations (
+    name    TEXT PRIMARY KEY,
+    ran_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
 } catch (e) {}
+
+// Resetear stats sucios del sistema viejo — solo corre UNA VEZ
+// try {
+//   const alreadyRan = db.prepare(`SELECT name FROM migrations WHERE name = 'reset_dirty_stats'`).get();
+//   if (!alreadyRan) {
+//     const dirty = db.prepare(`SELECT COUNT(*) as n FROM users WHERE total_lost > 0 AND total_won = 0`).get();
+//     if (dirty.n > 0) {
+//       db.exec("UPDATE users SET total_won = 0, total_lost = 0");
+//       console.log("🔧 Migración (one-time): stats reseteados (datos del sistema viejo).");
+//     }
+//     db.prepare(`INSERT OR IGNORE INTO migrations (name) VALUES (?)`).run('reset_dirty_stats');
+//   }
+// } catch (e) {}
+
 try {
   db.exec(`ALTER TABLE group_settings ADD COLUMN weekly_credits INTEGER DEFAULT 20000`);
 } catch (e) {}
@@ -172,28 +182,43 @@ function updateGroupSettings(groupId, settings) {
   );
 }
 
+// ─── NORMALIZACIÓN DE IDs ──────────────────────────────────────────────────────
+// WhatsApp multi-device genera IDs tipo "549247XXXX:15@lid" además del clásico "549247XXXX@c.us".
+// Esta función convierte cualquier formato al canónico @c.us para no duplicar usuarios.
+function normalizeUserId(rawId) {
+  if (!rawId || typeof rawId !== 'string') return rawId;
+  const number = rawId.split('@')[0].split(':')[0];
+  return number + '@c.us';
+}
+
 // ─── USUARIOS ─────────────────────────────────────────────────────────────────
 function getOrCreateUser(userId, groupId, username = null, phoneNumber = null) {
-  let user = db.prepare(`SELECT * FROM users WHERE user_id = ? AND group_id = ?`).get(userId, groupId);
-  
+  const normalizedId = normalizeUserId(userId);
+
+  // 1. Busca por ID canónico
+  let user = db.prepare(`SELECT * FROM users WHERE user_id = ? AND group_id = ?`).get(normalizedId, groupId);
+
+  // 2. Si no lo encuentra, busca por número de teléfono (por si hay un registro @lid viejo)
   if (!user) {
-    const stmt = db.prepare(`
+    user = findUserByPhone(normalizedId, groupId);
+  }
+
+  if (!user) {
+    // 3. Crear nuevo usuario con ID normalizado
+    db.prepare(`
       INSERT INTO users (user_id, group_id, username, phone_number, credits)
       VALUES (?, ?, ?, ?, ?)
-    `);
-    stmt.run(userId, groupId, username, phoneNumber, DEFAULT_WELCOME_CREDITS);
-    // Registrar la acreditación inicial
+    `).run(normalizedId, groupId, username, phoneNumber, DEFAULT_WELCOME_CREDITS);
     db.prepare(`
       INSERT INTO transactions (user_id, group_id, type, amount, description, balance_after)
       VALUES (?, ?, 'credit', ?, 'Créditos iniciales de bienvenida', ?)
-    `).run(userId, groupId, DEFAULT_WELCOME_CREDITS, DEFAULT_WELCOME_CREDITS);
-    user = db.prepare(`SELECT * FROM users WHERE user_id = ? AND group_id = ?`).get(userId, groupId);
+    `).run(normalizedId, groupId, DEFAULT_WELCOME_CREDITS, DEFAULT_WELCOME_CREDITS);
+    user = db.prepare(`SELECT * FROM users WHERE user_id = ? AND group_id = ?`).get(normalizedId, groupId);
   } else if (username && !user.username) {
-    // Actualizar username si no lo tenía
-    db.prepare(`UPDATE users SET username = ? WHERE user_id = ? AND group_id = ?`).run(username, userId, groupId);
+    db.prepare(`UPDATE users SET username = ? WHERE user_id = ? AND group_id = ?`).run(username, user.user_id, groupId);
     user.username = username;
   }
-  
+
   return user;
 }
 
@@ -201,12 +226,13 @@ function getOrCreateUser(userId, groupId, username = null, phoneNumber = null) {
 // netResult > 0 → ganancia neta (se suma a total_won)
 // netResult < 0 → pérdida neta (se suma a total_lost)
 function updateBetStats(userId, groupId, netResult) {
+  const canonicalId = normalizeUserId(userId);
   if (netResult > 0) {
     db.prepare(`UPDATE users SET total_won = total_won + ? WHERE user_id = ? AND group_id = ?`)
-      .run(netResult, userId, groupId);
+      .run(netResult, canonicalId, groupId);
   } else if (netResult < 0) {
     db.prepare(`UPDATE users SET total_lost = total_lost + ? WHERE user_id = ? AND group_id = ?`)
-      .run(Math.abs(netResult), userId, groupId);
+      .run(Math.abs(netResult), canonicalId, groupId);
   }
 }
 
@@ -234,18 +260,19 @@ function getUserCredits(userId, groupId) {
 // total_won y total_lost se actualizan por separado con updateBetStats().
 function updateUserCredits(userId, groupId, amount, type, description) {
   const user = getOrCreateUser(userId, groupId);
+  const canonicalId = user.user_id; // siempre usar el ID canónico guardado en DB
   const newBalance = user.credits + amount;
 
   db.prepare(`
     UPDATE users 
     SET credits = ?
     WHERE user_id = ? AND group_id = ?
-  `).run(newBalance, userId, groupId);
+  `).run(newBalance, canonicalId, groupId);
   
   db.prepare(`
     INSERT INTO transactions (user_id, group_id, type, amount, description, balance_after)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run(userId, groupId, type, amount, description, newBalance);
+  `).run(canonicalId, groupId, type, amount, description, newBalance);
   
   return newBalance;
 }
@@ -280,6 +307,16 @@ function getTopUsers(groupId, limit = 10) {
 // ✅ FIX BUG #3: Nueva función para evitar llamar db.prepare() desde commands.js e index.js
 function getUserCount(groupId) {
   return db.prepare(`SELECT COUNT(*) as count FROM users WHERE group_id = ?`).get(groupId).count;
+}
+
+// Retorna todos los usuarios registrados de un grupo (para /casino give sin @)
+function getGroupUsers(groupId) {
+  return db.prepare(`
+    SELECT user_id, username, credits
+    FROM users
+    WHERE group_id = ?
+    ORDER BY username
+  `).all(groupId);
 }
 
 // ─── JUEGOS ───────────────────────────────────────────────────────────────────
@@ -535,6 +572,7 @@ module.exports = {
   getGroupToken,
   getGroupSettings,
   updateGroupSettings,
+  normalizeUserId,
   getOrCreateUser,
   findUserByPhone,
   getUserCredits,
@@ -543,6 +581,7 @@ module.exports = {
   resetWeeklyCredits,
   getTopUsers,
   getUserCount,
+  getGroupUsers,
   createGame,
   getActiveGame,
   closeGame,

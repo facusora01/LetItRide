@@ -1,0 +1,14 @@
+# Dependencias
+node_modules/
+
+# Variables de entorno (Secretos)
+.env
+
+# Sesión de WhatsApp y Caché
+bot_session/
+.wwebjs_cache/
+
+# Base de datos
+*.db
+*.sqlite
+*.sqlite3
