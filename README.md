@@ -14,7 +14,6 @@ Un bot de WhatsApp de casino que ofrece ruleta en vivo con créditos semanales, 
 
 ## 📋 Requisitos
 
-
 - Node.js 16+
 - npm
 - WhatsApp Web
