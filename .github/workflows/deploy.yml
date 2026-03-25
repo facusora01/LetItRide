@@ -35,7 +35,7 @@ jobs:
         if: success() 
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.SSH_HOST }} # IP Tailscale (100.x.x.x)
+          host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
@@ -48,6 +48,10 @@ jobs:
             
             # Instalación limpia para producción
             npm install --production
+            
+            # 🛠️ FIX: Recompilar módulos nativos para Linux
+            # Esto soluciona el error 'invalid ELF header'
+            npm rebuild better-sqlite3
             
             # Reinicio inteligente del proceso
             pm2 restart let-it-ride || pm2 start index.js --name let-it-ride
