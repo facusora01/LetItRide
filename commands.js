@@ -135,7 +135,7 @@ const BET_MINIMUMS = {
 const MAX_BET_TARGETS = 15;
 
 // ─── VALIDADORES DE COMANDOS ──────────────────────────────────────────────────
-const VALID_SUBCOMMANDS = ["help", "add", "remove", "status", "start", "schedule", "days", "give"];
+const VALID_SUBCOMMANDS = ["help", "add", "remove", "status", "start", "reset", "config", "schedule", "days", "credits"];
 
 const COMMAND_RULES = {
   "/balance":   [1, 1],
@@ -147,6 +147,8 @@ const COMMAND_RULES = {
   "/letitride": [1, 1],
   "/bet":       [3, 17],
   "/admin":     [1, 2],
+  "/casino credits": [3, 3],
+  "/spin":      [1, 1],
 };
 
 const COMMAND_MAX_LENGTH = {
@@ -155,10 +157,11 @@ const COMMAND_MAX_LENGTH = {
   "/history":   8,
   "/stop":      5,
   "/confirmar": 9,
-  "/casino":    50,
+  "/casino":    30,
   "/letitride": 11,
   "/bet":       100,
   "/admin":     20,
+  "/spin":      5,
 };
 
 function validateCommand(parts) {
@@ -415,8 +418,7 @@ async function spinAndReport(client, groupId, gameId) {
     await new Promise(r => setTimeout(r, 5000));
     try {
       const stickerPath = path.join(__dirname, "Stickers", "LetItRide!!.20");
-      const stickerData = require("fs").readFileSync(stickerPath).toString("base64");
-      const media = new MessageMedia("image/webp", stickerData);
+      const media = MessageMedia.fromFilePath(stickerPath);
       await client.sendMessage(groupId, media, { sendMediaAsSticker: true });
     } catch (stickerErr) {
       console.warn("⚠️ No se pudo enviar el sticker:", stickerErr.message);
@@ -804,6 +806,19 @@ async function handleCommand(message, client) {
         return replyMsg;
       }
 
+      if (subcommand === "credits") {
+        const topCredits = db.getTopCreditsByGroup(groupId, 10);
+        if (topCredits.length === 0)
+          return message.reply("💳 No hay jugadores con créditos en este grupo.");
+
+        let msg = `💳 *Top Créditos — ${group.group_name}*\n\n`;
+        topCredits.forEach((u, i) => {
+          const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`;
+          msg += `${medal} ${u.username || 'Jugador'}: ${formatCredits(u.credits)}\n`;
+        });
+        return message.reply(msg);
+      }
+
       return message.reply('❓ Subcomando desconocido. Usá `/casino help`.');
     }
 
@@ -900,13 +915,14 @@ async function handleCommand(message, client) {
         msg += `Reaccioná a este mensaje con 👍 para confirmar _(expira en 2 min)_.`;
 
         const replyMsg = await message.reply(msg);
-        const msgId = replyMsg.id._serialized;
+        const previewMsgId = replyMsg.id._serialized;
 
         const timeoutId = setTimeout(() => {
-          pendingBetReactions.delete(msgId);
+          pendingBetReactions.delete(previewMsgId);
         }, 2 * 60 * 1000);
 
-        pendingBetReactions.set(msgId, {
+        pendingBetReactions.set(previewMsgId, {
+          msgId: previewMsgId,
           userId,
           groupId,
           amount,
@@ -1121,4 +1137,34 @@ async function handleCommand(message, client) {
   }
 }
 
-module.exports = { handleCommand, handlePollReaction, launchGame };
+// ─── MANEJO DE REACCIONES A APUESTAS ───────────────────────────────────────────
+async function handleBetReaction(reaction, client) {
+  try {
+    if (!['👍', '👎'].includes(reaction.reaction)) return;
+    
+    const { msgId, userId, amount, targets } = reaction;
+    const reactorId = reaction.reactorId;
+    const betUserId = userId;
+    
+    if (reactorId !== betUserId) return;
+    
+    if (reaction.reaction === '👍') {
+      // Confirmar apuesta
+      const game = db.getActiveGame(reaction.groupId);
+      if (!game) return;
+      
+      for (const target of targets) {
+        await db.placeBet(game.id, userId, target.type, target.value, amount);
+      }
+      
+      await client.sendMessage(reaction.groupId, `✅ Apuesta confirmada: ${formatCredits(amount)} en ${targets.map(t => t.value).join(', ')}`);
+    }
+    
+    // Eliminar apuesta pendiente
+    pendingConfirmations.delete(msgId);
+  } catch (error) {
+    console.error('Error en handleBetReaction:', error);
+  }
+}
+
+module.exports = { handleCommand, handlePollReaction, handleBetReaction, launchGame };
