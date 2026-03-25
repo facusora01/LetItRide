@@ -2,8 +2,7 @@ name: Deploy LetItRide Casino 🎰
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
 
 jobs:
   deploy:
@@ -12,48 +11,46 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # 🔐 1. Conexión a la red privada (Sin esto, el servidor es invisible)
+      # 🔐 Conexión a la red privada
       - name: Conectar a Tailscale
         uses: tailscale/github-action@v2
         with:
-          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci 
 
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
 
-      - name: Install dependencies (CI)
+      - name: Install dependencies
         run: npm install
 
-      # 🧪 2. Ejecutamos los tests que armamos hoy
       - name: Run Automated Tests
         run: npm test
 
-      # 🚢 3. Despliegue seguro por SSH
+      # 🚢 SSH a través del túnel de Tailscale
       - name: Deploy via SSH
         if: success() 
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.SSH_HOST }}
+          host: ${{ secrets.SSH_HOST }} # IP Tailscale (100.x.x.x)
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            set -x
+            set -e
             cd ~/LetItRide
             
-            # Limpieza de procesos viejos
-            pm2 stop let-it-ride || true
-            
-            # Sincronización de código
-            git fetch origin
+            # Sincronización total con el repo
+            git fetch origin main
             git reset --hard origin/main
             
-            # Instalación limpia
+            # Instalación limpia para producción
             npm install --production
             
-            # Inicio del bot de casino en puerto 3001
-            pm2 start index.js --name let-it-ride || pm2 restart let-it-ride
+            # Reinicio inteligente del proceso
+            pm2 restart let-it-ride || pm2 start index.js --name let-it-ride
             pm2 save
             
-            echo "✅ Deploy de Casino exitoso - $(date)"
+            echo "✅ Despliegue completado con éxito."
