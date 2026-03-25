@@ -922,7 +922,7 @@ async function handleCommand(message, client) {
         `Apuesta (${workingTargets.length} objetivo${workingTargets.length > 1 ? 's' : ''})`);
 
       for (const t of workingTargets) {
-        db.placeBet(activeGame.id, userId, t.betType, t.betValue, amount);
+        db.placeBet(activeGame.id, user.user_id, t.betType, t.betValue, amount);
       }
 
       let confirmMsg = `🎲 *Apuesta registrada*\n\n`;

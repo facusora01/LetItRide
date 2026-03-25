@@ -226,7 +226,10 @@ function getOrCreateUser(userId, groupId, username = null, phoneNumber = null) {
 // netResult > 0 → ganancia neta (se suma a total_won)
 // netResult < 0 → pérdida neta (se suma a total_lost)
 function updateBetStats(userId, groupId, netResult) {
-  const canonicalId = normalizeUserId(userId);
+  // Buscamos al usuario para asegurarnos de usar el ID exacto con el que está en la DB
+  const user = getOrCreateUser(userId, groupId);
+  const canonicalId = user.user_id; 
+
   if (netResult > 0) {
     db.prepare(`UPDATE users SET total_won = total_won + ? WHERE user_id = ? AND group_id = ?`)
       .run(netResult, canonicalId, groupId);
@@ -257,7 +260,6 @@ function getUserCredits(userId, groupId) {
 }
 
 // updateUserCredits solo maneja el saldo y el historial de transacciones.
-// total_won y total_lost se actualizan por separado con updateBetStats().
 function updateUserCredits(userId, groupId, amount, type, description) {
   const user = getOrCreateUser(userId, groupId);
   const canonicalId = user.user_id; // siempre usar el ID canónico guardado en DB
@@ -398,12 +400,15 @@ function updateBetStatus(betId, payout, status) {
 
 // ─── TRANSACCIONES ─────────────────────────────────────────────────────────────
 function getUserTransactions(userId, groupId, limit = 50) {
+  const user = getOrCreateUser(userId, groupId);
+  const canonicalId = user.user_id;
+
   return db.prepare(`
     SELECT * FROM transactions 
     WHERE user_id = ? AND group_id = ?
     ORDER BY created_at DESC 
     LIMIT ?
-  `).all(userId, groupId, limit);
+  `).all(canonicalId, groupId, limit);
 }
 
 // ─── UTILIDADES DE RULETA ───────────────────────────────────────────────────────
