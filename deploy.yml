@@ -1,0 +1,23 @@
+name: Deploy LetItRide Casino 🎰
+
+on:
+  push:
+    branches: [ main ] # Se dispara al pushear a main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🚀 SSH and Deploy
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }}     # La IP de sora-srv
+          username: ${{ secrets.SERVER_USER }} # Tu usuario (sora)
+          key: ${{ secrets.SSH_PRIVATE_KEY }}  # Tu llave privada Ed25519
+          port: 22
+          script: |
+            cd ~/LetItRide
+            git pull origin main
+            npm install
+            pm2 restart let-it-ride || pm2 start index.js --name let-it-ride
+            pm2 save

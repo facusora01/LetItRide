@@ -11,4 +11,5 @@ bot_session/
 # Base de datos
 *.db
 *.sqlite
-*.sqlite3
+*.sqlite3node_modules/
+.env
