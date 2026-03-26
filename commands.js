@@ -2,6 +2,7 @@ const db = require("./database");
 const { exec } = require("child_process");
 const { MessageMedia } = require("whatsapp-web.js");
 const path = require("path");
+const fs = require("fs");
 
 const CREDIT_DAY = parseInt(process.env.CREDIT_DAY) || 5;
 const BET_DURATION = parseInt(process.env.BET_DURATION) || 4; // minutos de apuestas
@@ -135,7 +136,9 @@ const BET_MINIMUMS = {
 const MAX_BET_TARGETS = 15;
 
 // ─── VALIDADORES DE COMANDOS ──────────────────────────────────────────────────
-const VALID_SUBCOMMANDS = ["help", "add", "remove", "status", "start", "reset", "config", "schedule", "days", "credits"];
+// ─── VALIDADORES DE COMANDOS ──────────────────────────────────────────────────
+// Quitamos "credits" y agregamos "give"
+const VALID_SUBCOMMANDS = ["help", "add", "remove", "status", "start", "reset", "config", "schedule", "days", "give"]; 
 
 const COMMAND_RULES = {
   "/balance":   [1, 1],
@@ -147,9 +150,8 @@ const COMMAND_RULES = {
   "/letitride": [1, 1],
   "/bet":       [3, 17],
   "/admin":     [1, 2],
-  "/casino credits": [3, 3],
   "/spin":      [1, 1],
-};
+}; // 👈 Borramos la regla de "/casino credits"
 
 const COMMAND_MAX_LENGTH = {
   "/balance":   8,
@@ -417,11 +419,15 @@ async function spinAndReport(client, groupId, gameId) {
 
     await new Promise(r => setTimeout(r, 2000));
 
-    // 🛠️ Envío de sticker LetItRide!!.20
+    // 🛠️ FIX: Forzamos el MIME type para que Linux no tire error por falta de extensión
     try {
+      const fs = require("fs"); // Asegurate de tenerlo importado arriba
       const stickerPath = path.join(__dirname, "Stickers", "LetItRide!!.20");
-      const media = MessageMedia.fromFilePath(stickerPath);
-      await client.sendMessage(groupId, media, { sendMediaAsSticker: true });
+      if (fs.existsSync(stickerPath)) {
+        const data = fs.readFileSync(stickerPath).toString('base64');
+        const media = new MessageMedia('image/webp', data, 'LetItRide.webp'); 
+        await client.sendMessage(groupId, media, { sendMediaAsSticker: true });
+      }
     } catch (stickerErr) {
       console.warn("⚠️ Error con el sticker:", stickerErr.message);
       await client.sendMessage(groupId, "🎰 *¡La ruleta está girando!* 🌀");
@@ -517,6 +523,20 @@ async function handleCommand(message, client) {
         if (e) console.error(`❌ ${e.message}`);
         else console.log(`✅ ${out}`);
       });
+      return;
+    }
+
+    // ─── COMANDO: /spin (SOLO SUPERADMIN) ─────────────────────────────────────
+    if (command === "/spin") {
+      const number = userId.split('@')[0].split(':')[0];
+      if (!SUPER_ADMINS.includes(number)) return;
+
+      const activeGame = db.getActiveGame(groupId);
+      if (!activeGame) return message.reply("🎰 No hay ninguna partida activa para girar.");
+
+      await message.reply("🎰 *Forzando giro de ruleta por Admin...*");
+      db.closeGame(activeGame.id); 
+      await spinAndReport(client, groupId, activeGame.id); 
       return;
     }
 
@@ -825,19 +845,6 @@ async function handleCommand(message, client) {
         setPendingConfirmation(replyMsg.id._serialized, userId, groupId, 'give_user', { giveAmount, realId, targetName });
         
         return replyMsg;
-      }
-
-      if (subcommand === "credits") {
-        const topCredits = db.getTopCreditsByGroup(groupId, 10);
-        if (topCredits.length === 0)
-          return message.reply("💳 No hay jugadores con créditos en este grupo.");
-
-        let msg = `💳 *Top Créditos — ${group.group_name}*\n\n`;
-        topCredits.forEach((u, i) => {
-          const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`;
-          msg += `${medal} ${u.username || 'Jugador'}: ${formatCredits(u.credits)}\n`;
-        });
-        return message.reply(msg);
       }
 
       return message.reply('❓ Subcomando desconocido. Usá `/casino help`.');
