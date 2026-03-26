@@ -409,24 +409,25 @@ async function launchGame(client, groupId, groupName) {
   }
 }
 
-// ─── SPIN + RESULTADOS ────────────────────────────────────────────────────────
+// ─── SPIN + RESULTADOS (ORDENADO POR GANANCIA) ───────────────────────────────
 async function spinAndReport(client, groupId, gameId) {
   try {
     const activeGame = db.getClosingGame(groupId);
     if (!activeGame || activeGame.id !== gameId) return;
 
-    await new Promise(r => setTimeout(r, 5000));
+    await new Promise(r => setTimeout(r, 2000));
+
+    // 🛠️ Envío de sticker LetItRide!!.20
     try {
       const stickerPath = path.join(__dirname, "Stickers", "LetItRide!!.20");
       const media = MessageMedia.fromFilePath(stickerPath);
       await client.sendMessage(groupId, media, { sendMediaAsSticker: true });
     } catch (stickerErr) {
-      console.warn("⚠️ No se pudo enviar el sticker:", stickerErr.message);
+      console.warn("⚠️ Error con el sticker:", stickerErr.message);
+      await client.sendMessage(groupId, "🎰 *¡La ruleta está girando!* 🌀");
     }
 
-    await new Promise(r => setTimeout(r, 3000));
-    await client.sendMessage(groupId, "🎰 *La ruleta está girando...* 🌀");
-    await new Promise(r => setTimeout(r, 10000));
+    await new Promise(r => setTimeout(r, 8000));
 
     const result = db.spinRoulette();
     db.completeGame(activeGame.id, result.number, result.color);
@@ -435,6 +436,7 @@ async function spinAndReport(client, groupId, gameId) {
     let totalPayout = 0;
     const winners = [];
 
+    // 1. Procesamos todas las apuestas
     for (const bet of bets) {
       const multiplier = db.calculateBetPayout(bet.bet_type, bet.bet_value, result.number, result.color);
       const winAmount = multiplier * bet.amount;
@@ -443,26 +445,45 @@ async function spinAndReport(client, groupId, gameId) {
       if (winAmount > 0) {
         db.updateUserCredits(bet.user_id, groupId, winAmount, 'win',
           `Ganancia - ${formatBetType(bet.bet_type, bet.bet_value)}`);
-        winners.push({ username: bet.username, amount: netResult, bet: formatBetType(bet.bet_type, bet.bet_value) });
+        
+        winners.push({ 
+          username: bet.username, 
+          amount: netResult, 
+          bet: formatBetType(bet.bet_type, bet.bet_value) 
+        });
         totalPayout += winAmount;
       }
       db.updateBetStats(bet.user_id, groupId, netResult);
       db.updateBetStatus(bet.id, winAmount, winAmount > 0 ? 'won' : 'lost');
     }
 
+    // 🚀 2. ORDENAR GANADORES: De mayor a menor ganancia
+    // Usamos el método sort con una función de comparación descendente
+    winners.sort((a, b) => b.amount - a.amount);
+
+    // 3. Construcción del mensaje con el ranking
     const colorEmoji = result.color === 'red' ? '🔴' : result.color === 'black' ? '⚫' : '🟢';
     const colorName = result.color === 'red' ? 'Rojo' : result.color === 'black' ? 'Negro' : 'Verde';
+    
     let msg = `🎰 *RESULTADO DE LA RULETA* 🎰\n\n`;
     msg += `${colorEmoji} *Número: ${result.number} — ${colorName}*\n\n`;
+
     if (winners.length > 0) {
-      msg += `🏆 *GANADORES*\n`;
-      winners.forEach(w => { msg += `👤 ${w.username}: +${w.amount.toLocaleString('es-AR')} créditos (${w.bet})\n`; });
+      msg += `🏆 *TOP GANADORES DE LA RONDA*\n`;
+      winners.forEach((w, index) => { 
+        // Agregamos un número de posición para que parezca un podio
+        const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '👤';
+        msg += `${medal} ${w.username}: +${w.amount.toLocaleString('es-AR')} créditos (${w.bet})\n`; 
+      });
       msg += `\n💰 Total pagado: ${formatCredits(totalPayout)}`;
     } else {
       msg += `😅 *Sin ganadores esta ronda*\n💰 El casino conserva todo`;
     }
+
     msg += `\n📊 ${bets.length} apuesta${bets.length !== 1 ? 's' : ''} registrada${bets.length !== 1 ? 's' : ''}`;
+    
     await client.sendMessage(groupId, msg);
+
   } catch (err) {
     console.error(`❌ Error en spinAndReport:`, err.message);
   }
