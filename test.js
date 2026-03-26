@@ -122,7 +122,7 @@ test("/stop MAYÚSCULAS exacto → válido (se normaliza)", () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 console.log(`\n${B}══ SUITE 2: /casino subcomandos ══${X}`);
 
-const validSubs = ["help", "add", "remove", "status", "start", "reset", "config", "schedule", "days", "credits"];
+const validSubs = ["help", "add", "remove", "status", "start", "reset", "schedule", "days"];
 validSubs.forEach(sub => {
   test(`/casino ${sub} → en VALID_SUBCOMMANDS`, () =>
     assert(VALID_SUBCOMMANDS.includes(sub))
@@ -349,7 +349,6 @@ const maliciousInputs = [
   "/bet 500 \u00007",
   // Números enormes
   "/bet 99999999999999999999999999 7",
-  "/casino credits 99999999999999999999",
   // Whitespace abuse
   // whitespace normalizado por split — se testea en suite 3
 ];

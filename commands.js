@@ -138,7 +138,7 @@ const MAX_BET_TARGETS = 15;
 // ─── VALIDADORES DE COMANDOS ──────────────────────────────────────────────────
 // ─── VALIDADORES DE COMANDOS ──────────────────────────────────────────────────
 // Quitamos "credits" y agregamos "give"
-const VALID_SUBCOMMANDS = ["help", "add", "remove", "status", "start", "reset", "config", "schedule", "days", "give"]; 
+const VALID_SUBCOMMANDS = ["help", "add", "remove", "status", "start", "reset", "schedule", "days", "give"]; 
 
 const COMMAND_RULES = {
   "/balance":   [1, 1],
@@ -419,17 +419,15 @@ async function spinAndReport(client, groupId, gameId) {
 
     await new Promise(r => setTimeout(r, 2000));
 
-    // 🛠️ FIX: Forzamos el MIME type para que Linux no tire error por falta de extensión
     try {
-      const fs = require("fs"); // Asegurate de tenerlo importado arriba
       const stickerPath = path.join(__dirname, "Stickers", "LetItRide!!.20");
       if (fs.existsSync(stickerPath)) {
         const data = fs.readFileSync(stickerPath).toString('base64');
-        const media = new MessageMedia('image/webp', data, 'LetItRide.webp'); 
+        const media = new MessageMedia('image/webp', data, 'LetItRide.webp'); // Forzamos webp
         await client.sendMessage(groupId, media, { sendMediaAsSticker: true });
       }
     } catch (stickerErr) {
-      console.warn("⚠️ Error con el sticker:", stickerErr.message);
+      console.warn("⚠️ Error sticker:", stickerErr.message);
       await client.sendMessage(groupId, "🎰 *¡La ruleta está girando!* 🌀");
     }
 
