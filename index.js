@@ -3,7 +3,7 @@ const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
 const cron = require("node-cron");
 const db = require("./database");
-const { handleCommand, handlePollReaction, launchGame } = require("./commands");
+const { handleCommand, handlePollReaction, handleBetReaction, launchGame } = require("./commands");
 
 // ─── CONFIGURACIÓN ────────────────────────────────────────────────────────────
 const GAME_SCHEDULE = process.env.GAME_SCHEDULE || "20:00";
@@ -18,7 +18,7 @@ const creditDayName = DAY_NAMES[CREDIT_DAY];
 const client = new Client({
   authStrategy: new LocalAuth({
     clientId: "letitride-casino-bot",
-    dataPath: "./bot_session"
+    dataPath: "./casino_session"
   }),
   puppeteer: {
     headless: true,
@@ -101,7 +101,12 @@ client.on("ready", () => {
 // ─── LISTENER DE REACCIONES (para el poll de /casino start) ──────────────────
 client.on("message_reaction", async (reaction) => {
   try {
+    // 1. Procesa votaciones de inicio (/casino start)
     await handlePollReaction(reaction, client);
+    
+    // 2. Procesa confirmaciones de apuestas y regalos
+    const reactorId = reaction.senderId; 
+    await handleBetReaction(client, reaction, reactorId); 
   } catch (err) {
     console.error("❌ Error en message_reaction:", err.message);
   }
