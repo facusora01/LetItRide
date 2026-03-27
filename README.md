@@ -144,10 +144,10 @@ ssh -i ~/.ssh/tu_clave.pem usuario@servidor.com
 pm2 status
 
 # Ver logs del bot
-pm2 logs letitride-casino-bot
+pm2 logs let-it-ride
 
 # Reiniciar el bot
-pm2 restart letitride-casino-bot
+pm2 restart let-it-ride
 
 # Ver procesos activos
 ps aux | grep node

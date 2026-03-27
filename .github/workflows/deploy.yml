@@ -11,7 +11,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # 🔐 Conexión a la red privada
+      # CACHE: No descargues node_modules si no cambió el package-lock.json
+      - name: Cache node modules
+        uses: actions/cache@v3
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
       - name: Conectar a Tailscale
         uses: tailscale/github-action@v2
         with:
@@ -23,14 +31,14 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: '18'
+          cache: 'npm' # Optimización nativa de setup-node
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci # 'ci' es mucho más rápido y limpio que 'install'
 
       - name: Run Automated Tests
         run: npm test
 
-      # 🚢 SSH a través del túnel de Tailscale
       - name: Deploy via SSH
         if: success() 
         uses: appleboy/ssh-action@v1.0.3
@@ -42,19 +50,18 @@ jobs:
             set -e
             cd ~/LetItRide
             
-            # Sincronización total con el repo
             git fetch origin main
             git reset --hard origin/main
             
-            # Instalación limpia para producción
-            npm install --production
+            # OPTIMIZACIÓN EN SERVIDOR
+            # 'npm ci' es ideal para servers. --omit=dev evita cargar basura.
+            npm ci --omit=dev
             
-            # 🛠️ FIX: Recompilar módulos nativos para Linux
-            # Esto soluciona el error 'invalid ELF header'
-            npm rebuild better-sqlite3
+            # ELIMINADO: npm rebuild better-sqlite3 
+            # (npm ci ya lo compila correctamente al detectar Linux)
             
-            # Reinicio inteligente del proceso
-            pm2 restart let-it-ride || pm2 start index.js --name let-it-ride
+            # Reinicio rápido
+            pm2 restart let-it-ride --update-env || pm2 start index.js --name let-it-ride
             pm2 save
             
             echo "✅ Despliegue completado con éxito."
