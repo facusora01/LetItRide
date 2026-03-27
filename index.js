@@ -124,7 +124,7 @@ async function processMessage(message) {
     if (!from.endsWith("@g.us") && !from.endsWith("@lid")) return;
 
     const lowerBody = body.toLowerCase();
-    const validCommands = ["/casino", "/letitride", "/bet", "/balance", "/top", "/history", "/stop", "/admin", "/confirmar"];
+    const validCommands = ["/casino", "/letitride", "/bet", "/balance", "/top", "/history", "/stop", "/admin", "/spin"];
     if (!validCommands.some(cmd => lowerBody.startsWith(cmd))) return;
 
     const logBody = body.length > 100 ? body.slice(0, 100) + "..." : body;
