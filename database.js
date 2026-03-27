@@ -115,7 +115,7 @@ try {
 
 // Actualizar grupos existentes que todavía tienen el valor viejo (1000)
 try {
-  db.exec(`UPDATE group_settings SET weekly_credits = 20000 WHERE weekly_credits = 1000`);
+  db.exec(`UPDATE group_settings SET weekly_credits = ${DEFAULT_WEEKLY_CREDITS} WHERE weekly_credits IN (1000, 20000)`);
 } catch (e) {}
 
 // ✅ FIX BUG #1: La migración del web_token va en la tabla 'groups', no en 'group_settings'
@@ -138,7 +138,7 @@ function addGroup(groupId, groupName) {
   `);
   stmt.run(groupId, groupName, token);
 
-  db.prepare(`INSERT OR IGNORE INTO group_settings (group_id) VALUES (?)`).run(groupId);
+  db.prepare(`INSERT OR IGNORE INTO group_settings (group_id, weekly_credits) VALUES (?, ?)`).run(groupId, DEFAULT_WEEKLY_CREDITS);
 }
 
 function removeGroup(groupId) {
@@ -285,7 +285,7 @@ function resetWeeklyCredits(groupId) {
   
   db.prepare(`
     UPDATE users 
-    SET credits = ?, last_credit_reset = CURRENT_TIMESTAMP 
+    SET credits = credits + ?, last_credit_reset = CURRENT_TIMESTAMP
     WHERE group_id = ?
   `).run(weeklyCredits, groupId);
   
@@ -605,5 +605,6 @@ module.exports = {
   getTopCreditsByGroup,
   getTopCreditsGlobal,
   getTopWinnersGlobal,
-  getRecentGames
+  getRecentGames,
+  DEFAULT_WEEKLY_CREDITS,
 };

@@ -1,4 +1,5 @@
 const db = require("./database");
+const { DEFAULT_WEEKLY_CREDITS } = db;
 const { exec } = require("child_process");
 const { MessageMedia } = require("whatsapp-web.js");
 const path = require("path");
@@ -138,7 +139,7 @@ const MAX_BET_TARGETS = 15;
 // ─── VALIDADORES DE COMANDOS ──────────────────────────────────────────────────
 // ─── VALIDADORES DE COMANDOS ──────────────────────────────────────────────────
 // Quitamos "credits" y agregamos "give"
-const VALID_SUBCOMMANDS = ["help", "add", "remove", "status", "start", "reset", "schedule", "days", "give"]; 
+const VALID_SUBCOMMANDS = ["help", "add", "remove", "status", "start", "reset", "schedule", "days", "give", "creditos"];
 
 const COMMAND_RULES = {
   "/balance":   [1, 1],
@@ -148,7 +149,7 @@ const COMMAND_RULES = {
   "/confirmar": [1, 1],
   "/casino":    [2, 5],
   "/letitride": [1, 1],
-  "/bet":       [3, 17],
+  "/bet":       [3, 52],
   "/admin":     [1, 2],
   "/spin":      [1, 1],
 }; // 👈 Borramos la regla de "/casino credits"
@@ -159,9 +160,9 @@ const COMMAND_MAX_LENGTH = {
   "/history":   8,
   "/stop":      5,
   "/confirmar": 9,
-  "/casino":    30,
+  "/casino":    100,
   "/letitride": 11,
-  "/bet":       100,
+  "/bet":       350,
   "/admin":     20,
   "/spin":      5,
 };
@@ -419,17 +420,24 @@ async function spinAndReport(client, groupId, gameId) {
 
     await new Promise(r => setTimeout(r, 2000));
 
-    try {
-      const stickerPath = path.join(__dirname, "Stickers", "LetItRide!!.20");
-      if (fs.existsSync(stickerPath)) {
-        const data = fs.readFileSync(stickerPath).toString('base64');
-        const media = new MessageMedia('image/webp', data, 'LetItRide.webp'); // Forzamos webp
-        await client.sendMessage(groupId, media, { sendMediaAsSticker: true });
-      }
-    } catch (stickerErr) {
-      console.warn("⚠️ Error sticker:", stickerErr.message);
+  try {
+    const stickerPath = path.join(__dirname, "Stickers", "LetItRide!!.20");
+    if (fs.existsSync(stickerPath)) {
+      const data = fs.readFileSync(stickerPath).toString('base64');
+      const media = new MessageMedia('image/webp', data, 'LetItRide.webp');
+      await client.sendMessage(groupId, media, {
+        sendMediaAsSticker: true,
+        stickerName: 'LetItRide',
+        stickerAuthor: 'Casino'
+      });
+    } else {
+      console.warn(`⚠️ Sticker no encontrado: ${stickerPath}`);
       await client.sendMessage(groupId, "🎰 *¡La ruleta está girando!* 🌀");
     }
+  } catch (stickerErr) {
+    console.warn("⚠️ Error sticker:", stickerErr.message);
+    await client.sendMessage(groupId, "🎰 *¡La ruleta está girando!* 🌀");
+  }
 
     await new Promise(r => setTimeout(r, 8000));
 
@@ -653,7 +661,7 @@ async function handleCommand(message, client) {
         let s = `📊 *Estado del Casino — ${group.group_name}*\n\n`;
         s += `🎰 Juego: ${activeGame ? `🟢 En curso (#${activeGame.id})` : hasPoll ? '🗳️ Votación en curso' : '🔴 Inactivo'}\n`;
         s += `👥 Jugadores registrados: ${totalUsers}\n`;
-        s += `💰 Créditos semanales: ${formatCredits(settings?.weekly_credits || 20000)}\n`;
+        s += `💰 Créditos semanales: ${formatCredits(settings?.weekly_credits || DEFAULT_WEEKLY_CREDITS)}\n`;
         s += `🕐 Horario automático: ${settings?.game_schedule || '20:00'}\n`;
         s += `📅 Días automáticos: ${settings?.game_days || '1,3,5'}\n`;
         s += `💳 Moneda: ${settings?.currency || 'Créditos'}`;
@@ -844,6 +852,25 @@ async function handleCommand(message, client) {
         
         return replyMsg;
       }
+
+      if (subcommand === "creditos") {
+      const senderNum = userId.split('@')[0].split(':')[0];
+      if (!SUPER_ADMINS.includes(senderNum))
+        return message.reply("⛔ Solo SuperAdmins pueden modificar los créditos semanales.");
+
+      const nuevoMonto = parseInt(parts[2]);
+      if (!nuevoMonto || isNaN(nuevoMonto) || nuevoMonto < 1)
+        return message.reply("❌ Uso: `/casino creditos <monto>`\nEj: `/casino creditos 100000`");
+
+      const settings = db.getGroupSettings(groupId);
+      db.updateGroupSettings(groupId, { ...settings, weekly_credits: nuevoMonto });
+
+      return message.reply(
+        `✅ *Créditos semanales actualizados*\n\n` +
+        `💰 Nuevo monto: ${formatCredits(nuevoMonto)}\n` +
+        `_(Se aplicará en la próxima recarga del ${creditDayName})_`
+      );
+    }
 
       return message.reply('❓ Subcomando desconocido. Usá `/casino help`.');
     }

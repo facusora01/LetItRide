@@ -119,7 +119,44 @@ El bot incluye un panel web seguro para administradores:
    - Monitorear juegos activos
    - Ver configuración del grupo
 
-## 🗄️ Base de Datos
+## Acceso SSH al Servidor
+
+Para acceder al servidor donde corre el bot en producción:
+
+### Conexión Básica
+```bash
+ssh usuario@servidor.com
+```
+
+### Con Puerto Personalizado
+```bash
+ssh -p 2222 usuario@servidor.com
+```
+
+### Usando Clave SSH
+```bash
+ssh -i ~/.ssh/tu_clave.pem usuario@servidor.com
+```
+
+### Comandos Útiles en el Servidor
+```bash
+# Ver estado del bot
+pm2 status
+
+# Ver logs del bot
+pm2 logs letitride-casino-bot
+
+# Reiniciar el bot
+pm2 restart letitride-casino-bot
+
+# Ver procesos activos
+ps aux | grep node
+
+# Ver uso de recursos
+htop
+```
+
+## �🗄️ Base de Datos
 
 El bot utiliza SQLite para almacenar:
 - Información de grupos y configuración
