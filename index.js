@@ -1,3 +1,5 @@
+const startupTime = Math.floor(Date.now() / 1000);
+
 require("dotenv").config();
 const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
@@ -114,6 +116,12 @@ client.on("message_reaction", async (reaction) => {
 
 // ─── HANDLER DE MENSAJES ──────────────────────────────────────────────────────
 async function processMessage(message) {
+  // Ignorar mensajes antiguos de la sincronización (backlog)
+  if (message.timestamp < startupTime) {
+      // Opcional: console.log(` Ignorando mensaje antiguo de ${message.from}`);
+      return;
+  }
+
   const body = message.body?.trim() || "";
   if (!body.startsWith("/") || body.length > 450) return;
 

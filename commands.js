@@ -533,18 +533,19 @@ async function handleCommand(message, client) {
     }
 
     // ─── COMANDO: /spin (SOLO SUPERADMIN) ─────────────────────────────────────
-    if (command === "/spin") {
-      const number = userId.split('@')[0].split(':')[0];
-      if (!SUPER_ADMINS.includes(number)) return;
+if (command === "/spin") {
+  const number = userId.split('@')[0].split(':')[0];
+  if (!SUPER_ADMINS.includes(number)) return;
 
-      const activeGame = db.getActiveGame(groupId);
-      if (!activeGame) return message.reply("🎰 No hay ninguna partida activa para girar.");
+  const activeGame = db.getActiveGame(groupId);
+  if (!activeGame) return message.reply("🎰 No hay ninguna partida activa para girar.");
 
-      await message.reply("🎰 *Forzando giro de ruleta por Admin...*");
-      db.closeGame(activeGame.id); 
-      await spinAndReport(client, groupId, activeGame.id); 
-      return;
-    }
+  console.log(`🕹️ Admin forzando giro...`);
+
+  // Llamada directa a la función reutilizable
+  await spinAndReport(client, groupId, activeGame.id); 
+  return;
+}
 
     if (command === "/balance") {
       if (!group || !group.active)
@@ -593,8 +594,8 @@ async function handleCommand(message, client) {
     if (command === "/letitride") {
       if (group && group.active)
         return message.reply('ℹ️ El casino ya está activo en este grupo. Usá `/casino help` para ver los comandos.');
-      const admin = await isAdmin(message, client);
-      if (!admin) return message.reply("🔒 Solo los administradores pueden agregar el casino.");
+      const admin = await isAdmin(message, client);3
+      if (!admin) return message.reply("🔒 Solo los administradores pueden agregarme.");
       const chat = await message.getChat();
       db.addGroup(groupId, chat.name);
       const welcomeMsg =
@@ -628,7 +629,7 @@ async function handleCommand(message, client) {
         if (group && group.active)
           return message.reply("ℹ️ El casino ya está activo en este grupo.");
         const admin = await isAdmin(message, client);
-        if (!admin) return message.reply("🔒 Solo los administradores pueden agregar el casino.");
+        if (!admin) return message.reply("🔒 Solo los administradores pueden agregarme.");
         const chat = await message.getChat();
         db.addGroup(groupId, chat.name);
         const welcomeMsg =
@@ -646,7 +647,7 @@ async function handleCommand(message, client) {
         if (parts.length !== 2)
           return message.reply("❌ Uso: `/casino remove`  (sin argumentos extra)");
         const admin = await isAdmin(message, client);
-        if (!admin) return message.reply("🔒 Solo los administradores pueden quitar el casino.");
+        if (!admin) return message.reply("🔒 Solo los administradores pueden quitarme.");
         db.removeGroup(groupId);
         return message.reply(`🏠 El casino cerró sus puertas. ¡Vuelvan pronto! 🎰`);
       }
@@ -943,6 +944,7 @@ async function handleCommand(message, client) {
       const totalCost = amount * workingTargets.length;
       const wasAdjusted = removedByMin.length > 0 || removedByFunds.length > 0;
 
+      // ─── CASO A: APUESTA AJUSTADA (Requiere confirmación manual) ───
       if (wasAdjusted) {
         let msg = `⚠️ *Tu apuesta fue ajustada* ✂️\n\n`;
 
@@ -981,12 +983,14 @@ async function handleCommand(message, client) {
           amount,
           targets: workingTargets,
           activeGameId: activeGame.id,
+          originalMsgId: message.id._serialized,
           timeoutId
         });
 
         return replyMsg;
       }
 
+      // ─── CASO B: APUESTA DIRECTA (Exitosa al instante) ───
       const newBalance = db.updateUserCredits(userId, groupId, -totalCost, 'bet',
         `Apuesta (${workingTargets.length} objetivo${workingTargets.length > 1 ? 's' : ''})`);
 
@@ -994,13 +998,7 @@ async function handleCommand(message, client) {
         db.placeBet(activeGame.id, user.user_id, t.betType, t.betValue, amount);
       }
 
-      let confirmMsg = `🎲 *Apuesta registrada*\n\n`;
-      confirmMsg += `💰 ${formatCredits(amount)} × ${workingTargets.length} = ${formatCredits(totalCost)}\n\n`;
-      confirmMsg += `*Tus apuestas:*\n`;
-      workingTargets.forEach(t => { confirmMsg += `  • ${formatBetType(t.betType, t.betValue)}\n`; });
-      confirmMsg += `\n💳 Saldo restante: ${formatCredits(newBalance)}\n🎰 ¡Buena suerte!`;
-
-      return message.reply(confirmMsg);
+      return message.react('✅'); 
     }
 
     if (command === "/confirmar") {
