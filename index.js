@@ -30,7 +30,7 @@ const client = new Client({
       "--disable-setuid-sandbox",
 
       "--disable-dev-shm-usage",       // Usa /tmp en lugar de memoria compartida
-      "--js-flags='--max-old-space-size=256'", // Limita el motor V8 para no comerse la RAM
+      "--js-flags='--max-old-space-size=512'",
       "--single-process",              // Corre todo en un solo hilo (ahorra CPU y RAM)
       "--no-zygote",                   // Evita procesos hijos pesados
 
