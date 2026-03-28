@@ -150,7 +150,7 @@ const COMMAND_RULES = {
   "/casino":    [2, 5],
   "/letitride": [1, 1],
   "/bet":       [3, 52],
-  "/admin":     [1, 3],
+  "/admin":     [1, 4],
   "/spin":      [1, 1],
 };
 
@@ -163,7 +163,7 @@ const COMMAND_MAX_LENGTH = {
   "/casino":    100,
   "/letitride": 11,
   "/bet":       350,
-  "/admin":     20,
+  "/admin":     150,
   "/spin":      5,
 };
 
@@ -1087,8 +1087,8 @@ async function handleCommand(message, client) {
           return message.reply("❌ Uso: `/admin give <cantidad>`");
         
         // Caso especial: selección de grupo después de mostrar lista
-        if (pendingAdminGive && /^\d+$/.test(parts[1])) {
-          const groupIndex = parseInt(parts[1]) - 1;
+        if (pendingAdminGive && parts[3] && /^\d+$/.test(parts[3])) {
+          const groupIndex = parseInt(parts[3]) - 1;
           const { amount: savedAmount, activeGroups } = pendingAdminGive;
           
           if (groupIndex >= 0 && groupIndex < activeGroups.length) {
