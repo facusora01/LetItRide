@@ -28,23 +28,25 @@ const client = new Client({
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
+
+      "--disable-dev-shm-usage",       // Usa /tmp en lugar de memoria compartida
+      "--js-flags='--max-old-space-size=256'", // Limita el motor V8 para no comerse la RAM
+      "--single-process",              // Corre todo en un solo hilo (ahorra CPU y RAM)
+      "--no-zygote",                   // Evita procesos hijos pesados
+
       "--disable-accelerated-2d-canvas",
-      "--disable-gpu",
-      "--no-first-run",           // Skip initial setup processes
-      "--no-zygote",              // Save process forking overhead
-      "--disable-notifications",  // Avoid Chrome's external alert processing
-      "--disable-extensions",     // Block unnecessary plugin loading
-      
-      // Velocity
-      "--disable-background-timer-throttling",     // Avoid slowing down when inactive
-      "--disable-backgrounding-occluded-windows",  // Keep high priority for the process
-      "--disable-renderer-backgrounding",          // Prevent system from putting the browser to sleep
+      "--disable-gpu",                 // No hay placa de video, no gastemos ciclos acá
+      "--disable-extensions",          // Evita cargar plugins innecesarios
+      "--disable-notifications",       // Evita alertas externas
+      "--no-first-run",                // Salta configuraciones iniciales de Chrome
+
       "--disable-background-timer-throttling",
       "--disable-backgrounding-occluded-windows",
-      "--proxy-server='direct://'",                // Skip proxy resolution for faster connection
+      "--disable-renderer-backgrounding",
+      
+      "--proxy-server='direct://'",
       "--proxy-bypass-list=*"
-    ],
+],
   },
 });
 
