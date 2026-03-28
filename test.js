@@ -477,7 +477,7 @@ test("Error de sticker es silencioso — no rompe el flujo", () => {
 });
 
 console.log(`\n${"─".repeat(50)}`);
-console.log(`📊 Resultados: ${passed}/${total} pasados`);
+console.log(` Resultados: ${passed}/${total} pasados`);
 if (failed > 0) {
   console.log(`${R} ${failed} test${failed > 1 ? "s" : ""} fallido${failed > 1 ? "s" : ""}${X}`);
   process.exit(1);

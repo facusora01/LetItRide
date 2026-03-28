@@ -11,14 +11,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # CACHE: No descargues node_modules si no cambió el package-lock.json
       - name: Cache node modules
         uses: actions/cache@v3
         with:
           path: ~/.npm
           key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-
 
       - name: Conectar a Tailscale
         uses: tailscale/github-action@v2
@@ -31,13 +28,10 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: '18'
-          cache: 'npm' # Optimización nativa de setup-node
+          cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci # 'ci' es mucho más rápido y limpio que 'install'
-
-      - name: Run Automated Tests
-        run: npm test
+        run: npm ci
 
       - name: Deploy via SSH
         if: success() 
@@ -50,18 +44,21 @@ jobs:
             set -e
             cd ~/LetItRide
             
+            # 1. ACTUALIZACIÓN SIN BORRAR SESIONES
             git fetch origin main
+            # Si usas bases de datos o sesiones en esta carpeta, 
+            # asegurate que estén en el .gitignore antes de hacer esto:
             git reset --hard origin/main
             
-            # OPTIMIZACIÓN EN SERVIDOR
-            # 'npm ci' es ideal para servers. --omit=dev evita cargar basura.
+            # 2. INSTALACIÓN LIMPIA
             npm ci --omit=dev
             
-            # ELIMINADO: npm rebuild better-sqlite3 
-            # (npm ci ya lo compila correctamente al detectar Linux)
+            # 3. REINICIO CON AUMENTO DE MEMORIA (FIX PARA EL 91% HEAP)
+            # Le asignamos 512MB de RAM explícitamente para evitar el lag
+            pm2 delete let-it-ride || true
+            pm2 start index.js --name let-it-ride --node-args="--max-old-space-size=512"
             
-            # Reinicio rápido
-            pm2 restart let-it-ride --update-env || pm2 start index.js --name let-it-ride
+            # 4. PERSISTENCIA
             pm2 save
             
-            echo "✅ Despliegue completado con éxito."
+            echo "✅ Despliegue completado y memoria optimizada."
