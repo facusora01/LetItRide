@@ -29,9 +29,19 @@ const client = new Client({
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
+      "--disable-accelerated-2d-canvas",
       "--disable-gpu",
-      "--disable-web-security",
-      "--disable-features=VizDisplayCompositor"
+      "--no-first-run",           // Skip initial setup processes
+      "--no-zygote",              // Save process forking overhead
+      "--disable-notifications",  // Avoid Chrome's external alert processing
+      "--disable-extensions",     // Block unnecessary plugin loading
+      
+      // Velocity
+      "--disable-background-timer-throttling",     // Avoid slowing down when inactive
+      "--disable-backgrounding-occluded-windows",  // Keep high priority for the process
+      "--disable-renderer-backgrounding",          // Prevent system from putting the browser to sleep
+      "--proxy-server='direct://'",                // Skip proxy resolution for faster connection
+      "--proxy-bypass-list=*"
     ],
   },
 });
