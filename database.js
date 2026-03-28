@@ -1,15 +1,31 @@
 const Database = require("better-sqlite3");
 const path = require("path");
 const crypto = require("crypto");
+const dbPath = path.join(__dirname, "letitride_casino.db");
+const db = new Database(dbPath);
+
 require("dotenv").config();
 
 // Créditos semanales — configurable desde .env (WEEKLY_AMOUNT=20000)
 const DEFAULT_WEEKLY_CREDITS = parseInt(process.env.WEEKLY_AMOUNT) || 60000;
 const DEFAULT_WELCOME_CREDITS = parseInt(process.env.WELCOME_AMOUNT) || 100000;
 
-const db = new Database(path.join(__dirname, "letitride_casino.db"));
-
 db.pragma('journal_mode = WAL');
+
+try {
+    const tableInfo = db.prepare("PRAGMA table_info(groups)").all();
+    const hasColumn = tableInfo.some(col => col.name === 'last_activity');
+
+    if (!hasColumn) {
+        console.log("🛠️ Columna 'last_activity' no detectada. Reparando esquema...");
+        db.exec("ALTER TABLE groups ADD COLUMN last_activity DATETIME;");
+        db.exec("UPDATE groups SET last_activity = CURRENT_TIMESTAMP;");
+        console.log("✅ Base de datos actualizada con éxito.");
+    }
+} catch (err) {
+    console.error("❌ Error crítico al verificar el esquema:", err.message);
+}
+
 
 // ─── TABLAS ───────────────────────────────────────────────────────────────────
 db.exec(`
