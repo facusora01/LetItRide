@@ -207,6 +207,11 @@ const pendingPolls = new Map();
 const pendingConfirmations = new Map();
 const pendingBetReactions = new Map();
 
+// Todas las variaciones del pulgar arriba (diferentes tonos de piel)
+const THUMB_UP_VARIATIONS = [
+  '👍', '👍🏻', '👍🏼', '👍🏽', '👍🏾', '👍🏿'
+];
+
 function setPendingConfirmation(msgId, userId, groupId, type, data, durationMs = 2 * 60 * 1000) {
   const existing = pendingConfirmations.get(msgId);
   if (existing) clearTimeout(existing.timeoutId);
@@ -312,8 +317,7 @@ async function handlePollReaction(reaction, client) {
     // ── 1. Confirmación de apuestas ajustadas por reacción ──
     if (pendingBetReactions.has(msgId)) {
       const betInfo = pendingBetReactions.get(msgId);
-      // Solo tomamos la reacción de quien creó la apuesta original y validamos el emoji
-      if (reaction.senderId === betInfo.userId && reaction.reaction === '👍') {
+      if (reaction.senderId === betInfo.userId && THUMB_UP_VARIATIONS.includes(reaction.reaction)) {
         clearTimeout(betInfo.timeoutId);
         pendingBetReactions.delete(msgId);
         await executeConfirmedBet(betInfo, client);
@@ -324,8 +328,7 @@ async function handlePollReaction(reaction, client) {
     // ── 2. Confirmación de transferencias / regalos ──
     if (pendingConfirmations.has(msgId)) {
       const pending = pendingConfirmations.get(msgId);
-      // Validamos que sea el usuario correcto y el emoji correcto
-      if (reaction.senderId === pending.userId && reaction.reaction === '👍') {
+      if (reaction.senderId === pending.userId && THUMB_UP_VARIATIONS.includes(reaction.reaction)) {
         clearTimeout(pending.timeoutId);
         pendingConfirmations.delete(msgId);
         await executeConfirmedGive(pending, client);
@@ -338,7 +341,8 @@ async function handlePollReaction(reaction, client) {
       if (poll.msgId !== msgId) continue;
       const voterId = reaction.senderId;
       if (!voterId) break;
-      if (reaction.reaction === '👍') {
+      
+      if (THUMB_UP_VARIATIONS.includes(reaction.reaction)) {
         if (reaction.read === false) {
           poll.yesVoters.add(voterId);
           console.log(`🗳️ Voto SÍ en ${groupId}: ${poll.yesVoters.size}/${poll.needed}`);
