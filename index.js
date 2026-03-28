@@ -213,9 +213,16 @@ client.on("message_create", (message) => {
   });
 });
 
+// ─── MONITOREO DE SALUD DEL NAVEGADOR ───────────────────────────────────
 client.on("disconnected", (reason) => {
-  console.error("❌ Bot desconectado:", reason);
-  process.exit(1);
+    console.error("🚨 Bot desconectado del socket:", reason);
+
+    process.exit(1); 
+});
+
+client.pupPage?.on('error', (err) => {
+    console.error("🔥 Error crítico en la página de Puppeteer:", err.message);
+    process.exit(1); 
 });
 
 process.on('unhandledRejection', (reason) => {
