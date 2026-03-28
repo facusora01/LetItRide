@@ -207,7 +207,6 @@ const pendingPolls = new Map();
 const pendingConfirmations = new Map();
 const pendingBetReactions = new Map();
 
-// Todas las variaciones del pulgar arriba (diferentes tonos de piel)
 const THUMB_UP_VARIATIONS = [
   '👍', '👍🏻', '👍🏼', '👍🏽', '👍🏾', '👍🏿'
 ];
@@ -1078,6 +1077,66 @@ async function handleCommand(message, client) {
       if (!SUPER_ADMINS.includes(number)) return;
 
       const sub = (parts[1] || "resumen").toLowerCase();
+      
+      // ─── COMANDO ADMIN GIVE ─────────────────────────────────────
+      if (sub === "give") {
+        const amount = parseInt(parts[2]) || 0;
+        
+        if (!amount || amount < 1)
+          return message.reply("❌ Uso: `/admin give <cantidad>`");
+        
+        // Caso especial: selección de grupo después de mostrar lista
+        if (pendingAdminGive && /^\d+$/.test(parts[1])) {
+          const groupIndex = parseInt(parts[1]) - 1;
+          const { amount: savedAmount, activeGroups } = pendingAdminGive;
+          
+          if (groupIndex >= 0 && groupIndex < activeGroups.length) {
+            const targetGroup = activeGroups[groupIndex];
+            db.updateUserCredits(userId, targetGroup.group_id, savedAmount, 'credit', 'Admin give directo');
+            const user = db.getOrCreateUser(userId, targetGroup.group_id);
+            
+            // Limpiar estado pendiente
+            pendingAdminGive = null;
+            
+            return message.reply(
+              `✅ *Créditos agregados* 🎁\n\n` +
+              `💰 ${formatCredits(savedAmount)} agregados a ${user.username || 'Sora'}\n` +
+              `🎰 Grupo: ${targetGroup.group_name}\n` +
+              `💳 Nuevo saldo: ${formatCredits(user.credits)}`
+            );
+          } else {
+            return message.reply("❌ Número de grupo inválido.");
+          }
+        }
+        
+        // Obtener todos los grupos activos
+        const activeGroups = db.getActiveGroups();
+        
+        if (activeGroups.length === 1) {
+          // Solo hay un grupo, dar créditos directamente
+          const targetGroup = activeGroups[0];
+          db.updateUserCredits(userId, targetGroup.group_id, amount, 'credit', 'Admin give directo');
+          const user = db.getOrCreateUser(userId, targetGroup.group_id);
+          return message.reply(
+            `✅ *Créditos agregados* 🎁\n\n` +
+            `💰 ${formatCredits(amount)} agregados a ${user.username || 'Sora'}\n` +
+            `🎰 Grupo: ${targetGroup.group_name}\n` +
+            `💳 Nuevo saldo: ${formatCredits(user.credits)}`
+          );
+        }
+        
+        // Múltiples grupos: mostrar lista para selección
+        let groupList = `🎰 *Selecciona el grupo destino:*\n\n`;
+        activeGroups.forEach((g, i) => {
+          groupList += `${i + 1}. ${g.group_name}\n`;
+        });
+        groupList += `\n💡 Usa: \`/admin give <cantidad> <número>\``;
+        
+        // Guardar cantidad para el siguiente comando
+        pendingAdminGive = { amount, activeGroups };
+        
+        return message.reply(groupList);
+      }
 
       if (sub === "resumen" || sub === "r") {
         const g = db.getGlobalStats();
