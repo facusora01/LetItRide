@@ -9,6 +9,8 @@ const DEFAULT_WELCOME_CREDITS = parseInt(process.env.WELCOME_AMOUNT) || 100000;
 
 const db = new Database(path.join(__dirname, "letitride_casino.db"));
 
+db.pragma('journal_mode = WAL');
+
 // ─── TABLAS ───────────────────────────────────────────────────────────────────
 db.exec(`
   CREATE TABLE IF NOT EXISTS groups (

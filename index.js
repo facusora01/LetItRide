@@ -60,7 +60,23 @@ client.on("qr", (qr) => {
 client.on("authenticated", () => console.log("✅ Autenticado correctamente."));
 client.on("auth_failure", (msg) => console.error("❌ Error de autenticación:", msg));
 
-client.on("ready", () => {
+client.on("ready", async () => {
+  try {
+    const page = client.pupPage;
+    await page.setRequestInterception(true);
+    page.on('request', (request) => {
+      const type = request.resourceType();
+      if (['image', 'stylesheet', 'font', 'media'].includes(type)) {
+        request.abort();
+      } else {
+        request.continue();
+      }
+    });
+    console.log("⚡ Optimización de recursos activa: Imágenes y Estilos bloqueados.");
+  } catch (e) {
+    console.error("⚠️ No se pudo activar la optimización de Puppeteer:", e.message);
+  }
+
   console.log("🎰 LetItRide Casino Bot listo y conectado a WhatsApp!\n");
 
   const groups = db.getActiveGroups();
@@ -69,10 +85,9 @@ client.on("ready", () => {
   console.log(`\n📅 Schedulers iniciados\n`);
 
   // ─── LIMPIEZA AUTOMÁTICA (3 DÍAS DE INACTIVIDAD) ─────────────────────────
-  // Corre todos los días a las 03:00 AM
   cron.schedule("0 3 * * *", async () => {
     console.log("🧹 Iniciando chequeo de inactividad...");
-    const inactiveGroups = db.getInactiveGroups(3); // Busca grupos sin comandos por 3 días
+    const inactiveGroups = db.getInactiveGroups(3); 
     
     for (const group of inactiveGroups) {
       try {
