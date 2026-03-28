@@ -150,9 +150,9 @@ const COMMAND_RULES = {
   "/casino":    [2, 5],
   "/letitride": [1, 1],
   "/bet":       [3, 52],
-  "/admin":     [1, 2],
+  "/admin":     [1, 3],
   "/spin":      [1, 1],
-}; // 👈 Borramos la regla de "/casino credits"
+};
 
 const COMMAND_MAX_LENGTH = {
   "/balance":   8,
