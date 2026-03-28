@@ -68,6 +68,29 @@ client.on("ready", () => {
   groups.forEach((g) => console.log(`   • ${g.group_name} (${g.group_id})`));
   console.log(`\n📅 Schedulers iniciados\n`);
 
+  // ─── LIMPIEZA AUTOMÁTICA (3 DÍAS DE INACTIVIDAD) ─────────────────────────
+  // Corre todos los días a las 03:00 AM
+  cron.schedule("0 3 * * *", async () => {
+    console.log("🧹 Iniciando chequeo de inactividad...");
+    const inactiveGroups = db.getInactiveGroups(3); // Busca grupos sin comandos por 3 días
+    
+    for (const group of inactiveGroups) {
+      try {
+        const chat = await client.getChatById(group.group_id);
+        await client.sendMessage(group.group_id, 
+          "👋 *Aviso de inactividad:*\n\n" +
+          "Este casino se retira del grupo debido a que no hubo actividad en los últimos 3 días. " +
+          "¡Vuelvan a invitarme cuando quieran jugar! 🎰"
+        );
+        await chat.leave();
+        db.removeGroup(group.group_id);
+        console.log(`🚪 Salida automática: ${group.group_name} por inactividad.`);
+      } catch (err) {
+        console.error(`❌ Error al salir del grupo ${group.group_id}:`, err.message);
+      }
+    }
+  }, { timezone: "America/Argentina/Buenos_Aires" });
+
   // ─── RESETEO SEMANAL DE CRÉDITOS ─────────────────────────────────────────
   cron.schedule(`0 0 * * ${CREDIT_DAY}`, () => {
     console.log(`🔄 Reseteo semanal de créditos (${creditDayName})`);
@@ -124,26 +147,36 @@ client.on("message_reaction", async (reaction) => {
   }
 });
 
-// ─── HANDLER DE MENSAJES ──────────────────────────────────────────────────────
+
+let isSynced = false; 
+// ───── HANDLER DE MENSAJES ─────────────────────
 async function processMessage(message) {
-  // Ignorar mensajes antiguos de la sincronización (backlog)
-  if (message.timestamp < startupTime) {
-      // Opcional: console.log(` Ignorando mensaje antiguo de ${message.from}`);
-      return;
+  // Filtro de mensajes antiguos (Backlog)
+  if (message.timestamp < startupTime) return;
+
+  if (!isSynced) {
+    isSynced = true;
+    console.log("\n" + "=".repeat(45));
+    console.log("🚀 SISTEMA SINCRONIZADO: Leyendo chat en tiempo real");
+    console.log(`📥 Primer mensaje recibido: "${message.body?.slice(0, 20)}..."`);
+    console.log("=".repeat(45) + "\n");
   }
 
   const body = message.body?.trim() || "";
+
   if (!body.startsWith("/") || body.length > 450) return;
 
-  // Si el mensaje es del propio bot (fromMe), el grupo está en message.to
   const from = message.fromMe ? message.to : message.from;
 
   try {
+
     if (!from.endsWith("@g.us") && !from.endsWith("@lid")) return;
 
     const lowerBody = body.toLowerCase();
     const validCommands = ["/casino", "/letitride", "/bet", "/balance", "/top", "/history", "/stop", "/admin", "/spin"];
     if (!validCommands.some(cmd => lowerBody.startsWith(cmd))) return;
+
+    db.updateGroupActivity(from); 
 
     const logBody = body.length > 100 ? body.slice(0, 100) + "..." : body;
     console.log(`\n🎰 [${new Date().toLocaleTimeString("es-AR")}] ${from}: "${logBody}"`);

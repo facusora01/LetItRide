@@ -17,6 +17,7 @@ db.exec(`
     group_name   TEXT,
     active       INTEGER DEFAULT 1,
     web_token    TEXT,
+    last_activity DATETIME DEFAULT CURRENT_TIMESTAMP,
     created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
@@ -96,19 +97,6 @@ try {
   )`);
 } catch (e) {}
 
-// Resetear stats sucios del sistema viejo — solo corre UNA VEZ
-// try {
-//   const alreadyRan = db.prepare(`SELECT name FROM migrations WHERE name = 'reset_dirty_stats'`).get();
-//   if (!alreadyRan) {
-//     const dirty = db.prepare(`SELECT COUNT(*) as n FROM users WHERE total_lost > 0 AND total_won = 0`).get();
-//     if (dirty.n > 0) {
-//       db.exec("UPDATE users SET total_won = 0, total_lost = 0");
-//       console.log("🔧 Migración (one-time): stats reseteados (datos del sistema viejo).");
-//     }
-//     db.prepare(`INSERT OR IGNORE INTO migrations (name) VALUES (?)`).run('reset_dirty_stats');
-//   }
-// } catch (e) {}
-
 try {
   db.exec(`ALTER TABLE group_settings ADD COLUMN weekly_credits INTEGER DEFAULT 20000`);
 } catch (e) {}
@@ -118,11 +106,22 @@ try {
   db.exec(`UPDATE group_settings SET weekly_credits = ${DEFAULT_WEEKLY_CREDITS} WHERE weekly_credits IN (1000, 20000)`);
 } catch (e) {}
 
-// ✅ FIX BUG #1: La migración del web_token va en la tabla 'groups', no en 'group_settings'
+// FIX BUG #1: La migración del web_token va en la tabla 'groups', no en 'group_settings'
 try {
   db.exec(`ALTER TABLE groups ADD COLUMN web_token TEXT`);
   console.log("🔧 Migración: Columna 'web_token' en 'groups' lista.");
 } catch (e) {}
+
+try {
+  const alreadyRan = db.prepare(`SELECT name FROM migrations WHERE name = 'add_last_activity_to_groups'`).get();
+  if (!alreadyRan) {
+    db.exec(`ALTER TABLE groups ADD COLUMN last_activity DATETIME DEFAULT CURRENT_TIMESTAMP`);
+    db.prepare(`INSERT INTO migrations (name) VALUES (?)`).run('add_last_activity_to_groups');
+    console.log("🔧 Migración: Columna 'last_activity' agregada correctamente.");
+  }
+} catch (e) {
+  // Si la columna ya existe por un comando manual, el try-catch evita que el bot se detenga
+}
 
 // ─── GRUPOS ───────────────────────────────────────────────────────────────────
 function addGroup(groupId, groupName) {
@@ -151,6 +150,21 @@ function getActiveGroups() {
 
 function getGroup(groupId) {
   return db.prepare(`SELECT * FROM groups WHERE group_id = ?`).get(groupId);
+}
+
+function updateGroupActivity(groupId) {
+  const stmt = db.prepare("UPDATE groups SET last_activity = CURRENT_TIMESTAMP WHERE group_id = ?");
+  stmt.run(groupId);
+}
+
+function getInactiveGroups(days = 3) {
+  const stmt = db.prepare(`
+    SELECT group_id, group_name 
+    FROM groups 
+    WHERE active = 1 
+    AND last_activity < datetime('now', '-${days} days')
+  `);
+  return stmt.all();
 }
 
 function getGroupToken(groupId) {
@@ -574,6 +588,8 @@ module.exports = {
   removeGroup,
   getActiveGroups,
   getGroup,
+  updateGroupActivity,
+  getInactiveGroups,
   getGroupToken,
   getGroupSettings,
   updateGroupSettings,

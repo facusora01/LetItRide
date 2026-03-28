@@ -513,6 +513,10 @@ async function handleCommand(message, client) {
     const command = parts[0]?.toLowerCase();
     const subcommand = (parts[1] || "").toLowerCase();
 
+    if (group && group.active) {
+        db.updateGroupActivity(groupId);
+    }
+
     if (!validateCommand(parts))
       return message.reply('❌ Comando mal escrito. Usá `/casino help` para ver el uso correcto.');
 
@@ -533,19 +537,19 @@ async function handleCommand(message, client) {
     }
 
     // ─── COMANDO: /spin (SOLO SUPERADMIN) ─────────────────────────────────────
-if (command === "/spin") {
-  const number = userId.split('@')[0].split(':')[0];
-  if (!SUPER_ADMINS.includes(number)) return;
+    if (command === "/spin") {
+      const number = userId.split('@')[0].split(':')[0];
+      if (!SUPER_ADMINS.includes(number)) return;
 
-  const activeGame = db.getActiveGame(groupId);
-  if (!activeGame) return message.reply("🎰 No hay ninguna partida activa para girar.");
+      const activeGame = db.getActiveGame(groupId);
+      if (!activeGame) return message.reply("🎰 No hay ninguna partida activa para girar.");
 
-  console.log(`🕹️ Admin forzando giro...`);
+      console.log(`🕹️ Admin forzando giro...`);
 
-  // Llamada directa a la función reutilizable
-  await spinAndReport(client, groupId, activeGame.id); 
-  return;
-}
+      // Llamada directa a la función reutilizable
+      await spinAndReport(client, groupId, activeGame.id); 
+      return;
+    }
 
     if (command === "/balance") {
       if (!group || !group.active)
