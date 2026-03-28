@@ -40,6 +40,8 @@ const client = new Client({
       "--disable-background-timer-throttling",     // Avoid slowing down when inactive
       "--disable-backgrounding-occluded-windows",  // Keep high priority for the process
       "--disable-renderer-backgrounding",          // Prevent system from putting the browser to sleep
+      "--disable-background-timer-throttling",
+      "--disable-backgrounding-occluded-windows",
       "--proxy-server='direct://'",                // Skip proxy resolution for faster connection
       "--proxy-bypass-list=*"
     ],
@@ -202,7 +204,12 @@ async function processMessage(message) {
   }
 }
 
-client.on("message_create", processMessage);
+client.on("message_create", (message) => {
+
+  processMessage(message).catch(err => {
+    console.error("❌ Error asíncrono en processMessage:", err.message);
+  });
+});
 
 client.on("disconnected", (reason) => {
   console.error("❌ Bot desconectado:", reason);
