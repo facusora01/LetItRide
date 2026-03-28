@@ -206,7 +206,7 @@ function validateCommand(parts) {
 const pendingPolls = new Map();
 const pendingConfirmations = new Map();
 const pendingBetReactions = new Map();
-const pendingAdminGive = null; // Para guardar estado de admin give entre comandos
+let pendingAdminGive = null;
 
 const THUMB_UP_VARIATIONS = [
   '👍', '👍🏻', '👍🏼', '👍🏽', '👍🏾', '👍🏿'
