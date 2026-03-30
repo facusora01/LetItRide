@@ -92,18 +92,23 @@ function calculateResults(quizData) {
   };
 }
 
-// ─── ENVÍO DEL QUIZ (clave del fix) ──────────────────────────────────────────────
+// ─── ENVÍO DEL QUIZ (FIX CORREGIDO) ────┬───┬───┬───────┬─┬───────┬───────
 async function sendQuiz(client, groupId, quizData) {
   const { quiz } = quizData;
 
   // 1. Mensaje informativo
   await client.sendMessage(groupId, formatInfoMessage(quiz));
 
-  // 2. Poll nativo usando la clase Poll de whatsapp-web.js
-  //    Las opciones van como strings simples (A) Opción, B) Opción...)
+  // 2. Poll nativo usando el objeto de opciones
   const pollOptions = quiz.options.map((opt, i) => `${String.fromCharCode(65 + i)}) ${opt}`);
-  const poll = new Poll(quiz.question, pollOptions, { allowMultipleAnswers: false });
-  const pollMsg = await client.sendMessage(groupId, poll);
+  
+  const pollMsg = await client.sendMessage(groupId, {
+    poll: {
+      name: quiz.question,
+      options: pollOptions,
+      allowMultipleAnswers: false
+    }
+  });
 
   // Guardar el ID del poll para detectar votos
   quizData.pollMessageId = pollMsg.id._serialized;
