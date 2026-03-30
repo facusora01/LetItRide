@@ -268,6 +268,7 @@ client.on("ready", async () => {
                   
                   // Enviar poll nativo usando new Poll()
                   const { Poll } = require("whatsapp-web.js");
+                  await client.sendMessage(group.group_id, quizMessage);
                   const poll = new Poll(quizData.quiz.question, pollOptions, { allowMultipleAnswers: false });
                   const pollMessage = await client.sendMessage(group.group_id, poll);
                   
@@ -300,18 +301,9 @@ client.on("ready", async () => {
 // ─── LISTENER DE REACCIONES (para el poll de /casino start y quizzes) ──────────────────
 client.on("message_reaction", async (reaction) => {
   try {
-    // 1. Procesa votaciones de inicio (/casino start)
     await handlePollReaction(reaction, client);
-    
-    // 2. Procesa respuestas de polls de quizzes
-    await handleQuizPollReaction(reaction, client);
-    
-    // 3. Procesa votaciones de inicio de quizzes
     await handleQuizPollVote(reaction, client);
-    
-    // 4. Procesa confirmaciones de apuestas y regalos
-    const reactorId = reaction.senderId; 
-    await handleBetReaction(client, reaction, reactorId); 
+    await handleBetReaction(reaction, client);         // ✅ orden correcto
   } catch (err) {
     console.error("❌ Error en message_reaction:", err.message);
   }
