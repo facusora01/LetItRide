@@ -378,9 +378,15 @@ async function processMessage(message) {
   }
 }
 
-client.on("message_create", (message) => {
+client.on("message_create", async (msg) => {
+  // Manejar votos de poll de quiz
+  if (msg.type === 'poll_vote') {
+    const { handleQuizPollVote } = require("./quizzes");
+    await handleQuizPollVote(msg, client);
+    return;
+  }
 
-  processMessage(message).catch(err => {
+  processMessage(msg).catch(err => {
     // Ignorar errores temporales de Chrome/Puppeteer
     if (err.message.includes("Target closed") || 
         err.message.includes("Protocol error") || 
