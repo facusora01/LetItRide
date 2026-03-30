@@ -116,40 +116,46 @@ function getRandomQuiz(difficulty) {
   return { ...quizzes[randomIndex], difficulty };
 }
 
-function formatQuizMessage(quiz, timeLimit = 30) {
+function formatQuizMessage(quiz, timeLimit = null) {
   const emoji = quiz.difficulty === 'easy' ? '🟢' : quiz.difficulty === 'normal' ? '🟡' : '🔴';
   const prize = QUIZ_PRIZES[quiz.difficulty];
   
+  // Usar tiempo límite global si no se especifica
+  const actualTimeLimit = timeLimit || (process.env.QUIZ_TIME_LIMIT ? parseInt(process.env.QUIZ_TIME_LIMIT) : 10);
+  
   let message = `${emoji} *QUIZ ${quiz.difficulty.toUpperCase()}* 🎯\n\n`;
   message += `💰 *Premio total:* ${prize.toLocaleString()} créditos\n`;
-  message += `⏱️ *Tiempo límite:* ${timeLimit} segundos\n\n`;
+  message += `⏱️ *Tiempo límite:* ${actualTimeLimit} segundos\n\n`;
   message += `📝 *Pregunta:* ${quiz.question}\n\n`;
-  message += `*Opciones:*\n`;
-  
-  quiz.options.forEach((option, index) => {
-    const letter = String.fromCharCode(65 + index); // A, B, C, D
-    message += `${letter}) ${option}\n`;
-  });
-  
-  message += `\n🎯 *Responde con la letra correcta (A, B, C o D)*`;
   
   return message;
+}
+
+function createPollOptions(quiz) {
+  return quiz.options.map((option, index) => {
+    const letter = String.fromCharCode(65 + index); // A, B, C, D
+    return `${letter}) ${option}`;
+  });
 }
 
 // ─── MANEJO DE QUIZZES ACTIVOS ───────────────────────────────────────────────────
 const activeQuizzes = new Map(); // groupId -> quizData
 
-function createQuiz(groupId, difficulty = 'normal') {
+function createQuiz(groupId, difficulty = 'normal', timeLimit = null) {
   const quiz = getRandomQuiz(difficulty);
   if (!quiz) return null;
+  
+  // Usar tiempo límite global si no se especifica
+  const actualTimeLimit = timeLimit || (process.env.QUIZ_TIME_LIMIT ? parseInt(process.env.QUIZ_TIME_LIMIT) * 1000 : 10000);
   
   const quizData = {
     id: Date.now().toString(),
     groupId,
     quiz,
     startTime: Date.now(),
-    timeLimit: 30000, // 30 segundos
+    timeLimit: actualTimeLimit, // en milisegundos
     responses: new Map(), // userId -> answer
+    pollMessageId: null, // Para guardar el ID del mensaje del poll
     status: 'active'
   };
   
@@ -321,7 +327,30 @@ async function handleQuizStart(message, client, parts) {
   
   // Enviar mensaje del quiz
   const quizMessage = formatQuizMessage(quizData.quiz);
-  await client.sendMessage(from, quizMessage);
+  const pollOptions = createPollOptions(quizData.quiz);
+  
+  try {
+    // Enviar como poll
+    const pollMessage = await client.sendMessage(from, quizMessage, {
+      poll: {
+        name: quizData.quiz.question,
+        options: pollOptions,
+        allowMultipleAnswers: false
+      }
+    });
+    
+    // Guardar el ID del mensaje del poll
+    quizData.pollMessageId = pollMessage.id._serialized;
+    
+    console.log(`🧠 Quiz poll creado: ${quizData.pollMessageId}`);
+    
+  } catch (error) {
+    console.error("Error creando poll:", error.message);
+    
+    // Fallback: enviar mensaje normal
+    const fallbackMessage = quizMessage + "\n\n" + pollOptions.join("\n");
+    await client.sendMessage(from, fallbackMessage);
+  }
   
   // Configurar timeout para terminar el quiz automáticamente
   setTimeout(async () => {
@@ -433,15 +462,60 @@ async function processQuizAnswer(message, client) {
   return success;
 }
 
+// ─── MANEJO DE POLLS DE QUIZ ─────────────────────────────────────────────────────
+async function handleQuizPollReaction(reaction, client) {
+  const from = reaction.message.from;
+  const senderId = reaction.senderId;
+  
+  // Buscar quiz activo en este grupo
+  const quizData = getActiveQuiz(from);
+  if (!quizData || quizData.status !== 'active') return;
+  
+  // Verificar si la reacción es para el mensaje del poll
+  if (quizData.pollMessageId && reaction.message.id._serialized !== quizData.pollMessageId) {
+    return;
+  }
+  
+  // Verificar si el tiempo ha expirado
+  if (Date.now() - quizData.startTime > quizData.timeLimit) {
+    return;
+  }
+  
+  // Obtener la opción seleccionada del poll
+  try {
+    const poll = await reaction.message.getPoll();
+    if (!poll) return;
+    
+    // Buscar la votación de este usuario
+    const userVote = poll.votes.find(vote => vote.voterId === senderId);
+    if (!userVote) return;
+    
+    // Convertir el índice de la opción a letra (0 -> A, 1 -> B, etc.)
+    const selectedOptionIndex = userVote.selectedOptions[0];
+    const answerLetter = String.fromCharCode(65 + selectedOptionIndex);
+    
+    // Registrar la respuesta
+    const success = submitAnswer(from, senderId, answerLetter);
+    if (success) {
+      console.log(`🧠 Respuesta de quiz registrada: ${senderId} -> ${answerLetter}`);
+    }
+    
+  } catch (error) {
+    console.error("Error procesando poll de quiz:", error.message);
+  }
+}
+
 module.exports = {
   handleQuizCommand,
   processQuizAnswer,
+  handleQuizPollReaction,
   getActiveQuiz,
   createQuiz,
   createRandomQuiz,
   endQuiz,
   formatQuizMessage,
   finishQuiz,
+  createPollOptions,
   QUIZ_PRIZES,
   QUIZ_BANK
 };

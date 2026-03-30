@@ -6,7 +6,7 @@ const qrcode = require("qrcode-terminal");
 const cron = require("node-cron");
 const db = require("./database");
 const { handleCommand, handlePollReaction, handleBetReaction, launchGame } = require("./commands");
-const { handleQuizCommand, processQuizAnswer, createRandomQuiz, finishQuiz } = require("./quizzes");
+const { handleQuizCommand, processQuizAnswer, createRandomQuiz, finishQuiz, handleQuizPollReaction, handleQuizPollVote } = require("./quizzes-new");
 
 // ─── CONFIGURACIÓN ────────────────────────────────────────────────────────────
 const GAME_SCHEDULE = process.env.GAME_SCHEDULE || "20:00";
@@ -23,6 +23,13 @@ const QUIZ_DAILY_COUNT = parseInt(process.env.QUIZ_DAILY_COUNT) || 3;
 const QUIZ_DAYS = process.env.QUIZ_DAYS || "1,2,3,4,5"; // Lunes a Viernes por defecto
 const QUIZ_START_HOUR = parseInt(process.env.QUIZ_START_HOUR) || 10;
 const QUIZ_END_HOUR = parseInt(process.env.QUIZ_END_HOUR) || 22;
+const QUIZ_TIME_LIMIT = parseInt(process.env.QUIZ_TIME_LIMIT) || 10; // Tiempo límite en segundos
+
+// Configuración de API de Quizzes
+const QUIZ_API_ENABLED = process.env.QUIZ_API_ENABLED === "true";
+const QUIZ_API_URL = process.env.QUIZ_API_URL || "https://opentdb.com/api.php";
+const QUIZ_API_TIMEOUT = parseInt(process.env.QUIZ_API_TIMEOUT) || 5000;
+const QUIZ_API_FALLBACK = process.env.QUIZ_API_FALLBACK !== "false";
 
 // Debug: mostrar configuración de quizzes
 console.log(`🧠 Configuración Quizzes: ${QUIZ_ENABLED ? 'ACTIVADO' : 'DESACTIVADO'}`);
@@ -30,6 +37,13 @@ if (QUIZ_ENABLED) {
   console.log(`   • Quizzes por día: ${QUIZ_DAILY_COUNT}`);
   console.log(`   • Días: ${QUIZ_DAYS}`);
   console.log(`   • Horario: ${QUIZ_START_HOUR}:00 - ${QUIZ_END_HOUR}:00`);
+  console.log(`   • Tiempo límite: ${QUIZ_TIME_LIMIT} segundos`);
+  console.log(`   • API Externa: ${QUIZ_API_ENABLED ? 'ACTIVADA' : 'DESACTIVADA'}`);
+  if (QUIZ_API_ENABLED) {
+    console.log(`   • URL API: ${QUIZ_API_URL}`);
+    console.log(`   • Timeout: ${QUIZ_API_TIMEOUT}ms`);
+    console.log(`   • Fallback local: ${QUIZ_API_FALLBACK ? 'SÍ' : 'NO'}`);
+  }
 }
 
 // ─── CLIENTE WHATSAPP ─────────────────────────────────────────────────────────
@@ -237,11 +251,32 @@ client.on("ready", async () => {
               );
               
               // Crear y ejecutar quiz
-              const quizData = createRandomQuiz(group.group_id, difficulty);
+              const quizData = await createRandomQuiz(group.group_id, difficulty);
               if (quizData) {
-                const { formatQuizMessage } = require("./quizzes");
+                const { formatQuizMessage, createPollOptions } = require("./quizzes-new");
                 const quizMessage = formatQuizMessage(quizData.quiz);
-                await client.sendMessage(group.group_id, quizMessage);
+                const pollOptions = createPollOptions(quizData.quiz);
+                
+                try {
+                  // Enviar como poll
+                  const pollMessage = await client.sendMessage(group.group_id, quizMessage, {
+                    poll: {
+                      name: quizData.quiz.question,
+                      options: pollOptions,
+                      allowMultipleAnswers: false
+                    }
+                  });
+                  
+                  // Guardar el ID del mensaje del poll
+                  quizData.pollMessageId = pollMessage.id._serialized;
+                  
+                } catch (error) {
+                  console.error("Error creando poll automático:", error.message);
+                  
+                  // Fallback: enviar mensaje normal
+                  const fallbackMessage = quizMessage + "\n\n" + pollOptions.join("\n");
+                  await client.sendMessage(group.group_id, fallbackMessage);
+                }
                 
                 // Auto-terminar después del tiempo límite
                 setTimeout(async () => {
@@ -258,13 +293,19 @@ client.on("ready", async () => {
   }
 });
 
-// ─── LISTENER DE REACCIONES (para el poll de /casino start) ──────────────────
+// ─── LISTENER DE REACCIONES (para el poll de /casino start y quizzes) ──────────────────
 client.on("message_reaction", async (reaction) => {
   try {
     // 1. Procesa votaciones de inicio (/casino start)
     await handlePollReaction(reaction, client);
     
-    // 2. Procesa confirmaciones de apuestas y regalos
+    // 2. Procesa respuestas de polls de quizzes
+    await handleQuizPollReaction(reaction, client);
+    
+    // 3. Procesa votaciones de inicio de quizzes
+    await handleQuizPollVote(reaction, client);
+    
+    // 4. Procesa confirmaciones de apuestas y regalos
     const reactorId = reaction.senderId; 
     await handleBetReaction(client, reaction, reactorId); 
   } catch (err) {
