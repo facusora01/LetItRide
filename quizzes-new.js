@@ -27,6 +27,9 @@ const EMOJI_TO_INDEX = {
 
 const INDEX_TO_LETTER = ['A', 'B', 'C', 'D'];
 
+// ─── QUIZZES ACTIVOS POR MESSAGE ID (para reacciones) ────────────────────────────
+const pendingQuizReactions = new Map(); // msgId -> quizData
+
 // ─── POLLS DE VOTACIÓN ACTIVOS ───────────────────────────────────────────────────
 const activeQuizPolls = new Map(); // groupId -> pollData
 
@@ -171,10 +174,22 @@ async function startQuizDirectly(groupId, difficulty, client) {
     try {
       const msg = await client.sendMessage(groupId, fullMessage);
       
-      // Guardar el ID del mensaje para detectar reacciones
-      quizData.quizMessageId = msg.id._serialized;
+      // Guardar el ID del mensaje para detectar reacciones (igual que pendingBetReactions)
+      const quizMessageId = msg.id._serialized;
+      quizData.quizMessageId = quizMessageId;
       
-      console.log(`🧠 Quiz enviado: ${quizData.quizMessageId} (15s límite)`);
+      // Guardar en el Map para reacciones (lógica copiada de handlePollReaction)
+      pendingQuizReactions.set(quizMessageId, {
+        msgId: quizMessageId,
+        groupId,
+        quizData,
+        startTime: Date.now(),
+        timeoutId: setTimeout(() => {
+          pendingQuizReactions.delete(quizMessageId);
+        }, QUIZ_TIME_LIMIT + 5000) // +5s de gracia
+      });
+      
+      console.log(`🧠 Quiz enviado: ${quizMessageId} (15s límite)`);
       
     } catch (error) {
       console.error("Error enviando quiz:", error.message);
@@ -468,74 +483,41 @@ async function processQuizAnswer(message, client) {
 async function handleQuizPollReaction(reaction, client) {
   if (!reaction.message) return;
   
-  const from = reaction.message.from;
   const senderId = reaction.senderId;
   const emoji = reaction.reaction;
   
-  // Obtener el ID del mensaje reaccionado (puede estar en msgId o message.id)
-  const reactionMsgId = reaction.msgId?._serialized || reaction.message.id?._serialized;
-  if (!reactionMsgId) {
-    console.log("⚠️ No se pudo obtener el ID del mensaje de la reacción");
+  // Obtener el ID del mensaje reaccionado (igual que handlePollReaction)
+  const msgId = reaction.msgId?._serialized;
+  if (!msgId) return;
+  
+  // Buscar quiz por msgId (igual que pendingBetReactions en handlePollReaction)
+  const pendingQuiz = pendingQuizReactions.get(msgId);
+  if (!pendingQuiz) return; // No es un quiz activo
+  
+  const { groupId, quizData, startTime } = pendingQuiz;
+  
+  // Verificar si el tiempo ha expirado (15 segundos)
+  if (Date.now() - startTime > QUIZ_TIME_LIMIT) {
+    console.log(`⚠️ Tiempo expirado para quiz`);
     return;
   }
   
-  // Debug: mostrar info de la reacción recibida
-  console.log(`🔍 Reacción recibida: ${emoji} de ${senderId} en msg ${reactionMsgId.substring(0, 20)}...`);
-  
-  // Verificar si es un quiz activo
-  const quizData = getActiveQuiz(from);
-  if (quizData && quizData.status === 'active') {
-    console.log(`🔍 Quiz activo encontrado. QuizMessageId: ${quizData.quizMessageId?.substring(0, 20)}...`);
-    
-    // Verificar si la reacción es para el mensaje del quiz
-    if (quizData.quizMessageId && reactionMsgId !== quizData.quizMessageId) {
-      console.log(`⚠️ ID no coincide. Esperado: ${quizData.quizMessageId?.substring(0, 20)}..., Recibido: ${reactionMsgId.substring(0, 20)}...`);
-      return;
-    }
-    
-    // Verificar si el tiempo ha expirado (15 segundos)
-    if (Date.now() - quizData.startTime > QUIZ_TIME_LIMIT) {
-      console.log(`⚠️ Tiempo expirado para quiz`);
-      return;
-    }
-    
-    // Verificar si el emoji es una resp válida (1️⃣ 2️⃣ 3️⃣ 4️⃣)
-    const optionIndex = EMOJI_TO_INDEX[emoji];
-    if (optionIndex === undefined) {
-      console.log(`⚠️ Emoji no reconocido: ${emoji} (código: ${emoji?.charCodeAt(0)})`);
-      return;
-    }
-    
-    // Convertir índice a letra (0 -> A, 1 -> B, etc.)
-    const answerLetter = INDEX_TO_LETTER[optionIndex];
-    
-    // Registrar la respuesta
-    const success = submitAnswer(from, senderId, answerLetter);
-    if (success) {
-      console.log(`🧠 Respuesta de quiz registrada: ${senderId} -> ${answerLetter}`);
-    } else {
-      console.log(`⚠️ No se pudo registrar respuesta de ${senderId} (¿ya había respondido?)`);
-    }
+  // Verificar si el emoji es una resp válida (1️⃣ 2️⃣ 3️⃣ 4️⃣)
+  const optionIndex = EMOJI_TO_INDEX[emoji];
+  if (optionIndex === undefined) {
+    console.log(`⚠️ Emoji no reconocido: ${emoji}`);
     return;
   }
   
-  // Verificar si es una votación activa para iniciar quiz
-  const pollData = activeQuizPolls.get(from);
-  if (pollData) {
-    // Verificar si la reacción es 1️⃣ (voto sí)
-    if (emoji === '1️⃣' || emoji === '1') {
-      // Verificar si el tiempo ha expirado
-      if (Date.now() - pollData.startTime > pollData.timeout) {
-        return;
-      }
-      
-      // Guardar voto (solo una vez por usuario)
-      if (!pollData.votes.has(senderId)) {
-        pollData.votes.add(senderId);
-        console.log(`🗳️ Voto de quiz registrado: ${senderId}`);
-      }
-    }
-    return;
+  // Convertir índice a letra (0 -> A, 1 -> B, etc.)
+  const answerLetter = INDEX_TO_LETTER[optionIndex];
+  
+  // Registrar la respuesta
+  const success = submitAnswer(groupId, senderId, answerLetter);
+  if (success) {
+    console.log(`🧠 Respuesta de quiz registrada: ${senderId} -> ${answerLetter}`);
+  } else {
+    console.log(`⚠️ No se pudo registrar respuesta de ${senderId} (¿ya había respondido?)`);
   }
 }
 

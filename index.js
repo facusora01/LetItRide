@@ -175,6 +175,14 @@ client.on("ready", async () => {
 
 // ─── LISTENER DE REACCIONES (para el poll de /casino start y quizzes) ──────────────────
 client.on("message_reaction", async (reaction) => {
+  console.log(`🔔🔔🔔 REACTION EVENT 🔥🔥🔥`, JSON.stringify({
+    emoji: reaction.reaction,
+    sender: reaction.senderId,
+    msgId: reaction.msgId?._serialized,
+    hasMessage: !!reaction.message,
+    msgFrom: reaction.message?.from
+  }));
+  
   try {
     // 1. Procesa votaciones de inicio (/casino start)
     await handlePollReaction(reaction, client);
