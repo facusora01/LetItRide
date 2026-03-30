@@ -481,8 +481,6 @@ async function processQuizAnswer(message, client) {
 
 // ─── MANEJO DE REACCIONES DE QUIZ ───────────────────────────────────────────────
 async function handleQuizPollReaction(reaction, client) {
-  if (!reaction.message) return;
-  
   const senderId = reaction.senderId;
   const emoji = reaction.reaction;
   
@@ -515,7 +513,7 @@ async function handleQuizPollReaction(reaction, client) {
   // Registrar la respuesta
   const success = submitAnswer(groupId, senderId, answerLetter);
   if (success) {
-    console.log(`🧠 Respuesta de quiz registrada: ${senderId} -> ${answerLetter}`);
+    console.log(`✅✅✅ RESPUESTA REGISTRADA: ${senderId} -> ${answerLetter} en grupo ${groupId}`);
   } else {
     console.log(`⚠️ No se pudo registrar respuesta de ${senderId} (¿ya había respondido?)`);
   }
