@@ -1,6 +1,7 @@
 const db = require("./database");
 const { Poll } = require("whatsapp-web.js");
 const { QUIZ_BANK, QUIZ_PRIZES, QUIZ_CATEGORIES } = require("./quiz-data");
+const { isAdmin } = require("./commands");
 
 // ─── QUIZZES ACTIVOS ──────────────────────────────────────────────────────────────
 // groupId → { id, quiz, startTime, timeLimit, responses, pollMessageId, status }
@@ -172,6 +173,14 @@ async function handleQuizCommand(message, client) {
 
 async function handleQuizStart(message, client, parts) {
   const from = message.fromMe ? message.to : message.from;
+
+  // Solo admins pueden iniciar quizzes
+  const isUserAdmin = await isAdmin(message, client);
+  if (!isUserAdmin) {
+    return client.sendMessage(from,
+      "🔒 *Solo los admins pueden iniciar quizzes.*\n" +
+      "Pedí a un admin que lo inicie por vos.");
+  }
 
   if (getActiveQuiz(from)) {
     return client.sendMessage(from,
