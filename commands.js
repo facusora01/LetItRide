@@ -532,12 +532,30 @@ async function spinAndReport(client, groupId, gameId) {
   }
 }
 
-// ─── HANDLER PRINCIPAL ────────────────────────────────────────────────────────
 async function handleCommand(message, client) {
   try {
     const body = message.body?.trim() || "";
     const groupId = message.fromMe ? message.to : message.from;
-    const userId = message.author || message.from;
+    
+    // 🚨 FIX CRÍTICO: Extraer el ID real previniendo el bug de WWebJS
+    let rawUserId = message.author || message.id?.participant || (message.fromMe ? client.info.wid._serialized : message.from);
+    
+    // Si por algún motivo el ID sigue siendo el del grupo, lo bloqueamos
+    if (!rawUserId || rawUserId.includes('@g.us')) {
+        return; // Ignoramos silenciosamente para no cruzar cuentas
+    }
+
+    // Si es un dispositivo vinculado (@lid), intentamos traducir a número real
+    if (rawUserId.includes('@lid')) {
+        try {
+            const contact = await message.getContact();
+            if (contact && contact.number) {
+                rawUserId = contact.number + '@c.us';
+            }
+        } catch (e) {}
+    }
+    
+    const userId = rawUserId;
 
     let group = db.getGroup(groupId);
     const parts = body.split(/\s+/);
