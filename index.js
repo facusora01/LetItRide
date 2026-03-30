@@ -5,8 +5,7 @@ const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
 const cron = require("node-cron");
 const db = require("./database");
-const { handleCommand, handlePollReaction, handleBetReaction, launchGame } = require("./commands");
-const { handleQuizCommand, processQuizAnswer, createRandomQuiz, finishQuiz, handleQuizPollReaction, handleQuizPollVote } = require("./quizzes-new");
+const { handleCommand, handlePollReaction, handleBetReaction, launchGame, handleQuizCommand, handleQuizPollVote } = require("./commands");
 
 // ─── CONFIGURACIÓN ────────────────────────────────────────────────────────────
 const GAME_SCHEDULE = process.env.GAME_SCHEDULE || "20:00";
@@ -264,14 +263,13 @@ client.on("ready", async () => {
                 const pollOptions = createPollOptions(quizData.quiz);
                 
                 try {
-                  // Enviar como poll
-                  const pollMessage = await client.sendMessage(group.group_id, quizMessage, {
-                    poll: {
-                      name: quizData.quiz.question,
-                      options: pollOptions,
-                      allowMultipleAnswers: false
-                    }
-                  });
+                  // Enviar mensaje informativo primero
+                  await client.sendMessage(group.group_id, quizMessage);
+                  
+                  // Enviar poll nativo usando new Poll()
+                  const { Poll } = require("whatsapp-web.js");
+                  const poll = new Poll(quizData.quiz.question, pollOptions, { allowMultipleAnswers: false });
+                  const pollMessage = await client.sendMessage(group.group_id, poll);
                   
                   // Guardar el ID del mensaje del poll
                   quizData.pollMessageId = pollMessage.id._serialized;

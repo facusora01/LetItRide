@@ -524,7 +524,6 @@ async function handleQuizPollReaction(reaction, client) {
 async function handleQuizPollVote(reaction, client) {
   // Verificar que reaction.message existe
   if (!reaction.message) {
-    console.log("⚠️ Quiz poll vote sin mensaje asociado - ignorando");
     return;
   }
   

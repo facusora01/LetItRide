@@ -1,7 +1,6 @@
 const db = require("./database");
 const { Poll } = require("whatsapp-web.js");
 const { QUIZ_BANK, QUIZ_PRIZES, QUIZ_CATEGORIES } = require("./quiz-data");
-const { isAdmin } = require("./commands");
 
 // ─── QUIZZES ACTIVOS ──────────────────────────────────────────────────────────────
 // groupId → { id, quiz, startTime, timeLimit, responses, pollMessageId, status }
@@ -100,16 +99,10 @@ async function sendQuiz(client, groupId, quizData) {
   // 1. Mensaje informativo
   await client.sendMessage(groupId, formatInfoMessage(quiz));
 
-  // 2. Poll nativo usando el objeto de opciones
+  // 2. Poll nativo usando la clase Poll de whatsapp-web.js
   const pollOptions = quiz.options.map((opt, i) => `${String.fromCharCode(65 + i)}) ${opt}`);
-  
-  const pollMsg = await client.sendMessage(groupId, {
-    poll: {
-      name: quiz.question,
-      options: pollOptions,
-      allowMultipleAnswers: false
-    }
-  });
+  const poll = new Poll(quiz.question, pollOptions, { allowMultipleAnswers: false });
+  const pollMsg = await client.sendMessage(groupId, poll);
 
   // Guardar el ID del poll para detectar votos
   quizData.pollMessageId = pollMsg.id._serialized;
@@ -159,75 +152,6 @@ async function finishQuiz(groupId, client) {
   await client.sendMessage(groupId, msg);
 }
 
-// ─── COMANDOS ─────────────────────────────────────────────────────────────────────
-async function handleQuizCommand(message, client) {
-  const body = message.body.trim().toLowerCase();
-  const from = message.fromMe ? message.to : message.from;
-  const parts = body.split(' ');
-  const sub = parts[1];
-
-  if (sub === 'start') return handleQuizStart(message, client, parts);
-  if (sub === 'stop')  return handleQuizStop(message, client);
-  return handleQuizHelp(message, client);
-}
-
-async function handleQuizStart(message, client, parts) {
-  const from = message.fromMe ? message.to : message.from;
-
-  // Solo admins pueden iniciar quizzes
-  const isUserAdmin = await isAdmin(message, client);
-  if (!isUserAdmin) {
-    return client.sendMessage(from,
-      "🔒 *Solo los admins pueden iniciar quizzes.*\n" +
-      "Pedí a un admin que lo inicie por vos.");
-  }
-
-  if (getActiveQuiz(from)) {
-    return client.sendMessage(from,
-      "⚠️ *Ya hay un quiz activo.*\nUsá `/quiz stop` para cancelarlo.");
-  }
-
-  let difficulty = 'normal';
-  if (parts[2]) {
-    if (['easy', 'facil', 'fácil'].includes(parts[2])) difficulty = 'easy';
-    else if (['hard', 'dificil', 'difícil'].includes(parts[2])) difficulty = 'hard';
-  }
-
-  const quizData = createQuiz(from, difficulty);
-  if (!quizData) return client.sendMessage(from, "❌ No se pudo crear el quiz.");
-
-  await sendQuiz(client, from, quizData);
-
-  // Auto-cierre
-  setTimeout(async () => {
-    const q = getActiveQuiz(from);
-    if (q && q.status === 'active') await finishQuiz(from, client);
-  }, quizData.timeLimit);
-}
-
-async function handleQuizStop(message, client) {
-  const from = message.fromMe ? message.to : message.from;
-  if (!getActiveQuiz(from))
-    return client.sendMessage(from, "⚠️ *No hay ningún quiz activo.*");
-  await finishQuiz(from, client);
-}
-
-async function handleQuizHelp(message, client) {
-  const from = message.fromMe ? message.to : message.from;
-  const secs = getTimeLimit();
-  await client.sendMessage(from,
-    `🎯 *COMANDOS DE QUIZ* 🎯\n\n` +
-    `▸ \`/quiz start\` — Quiz normal (🟡 100.000 créditos)\n` +
-    `▸ \`/quiz start easy\` — Quiz fácil (🟢 50.000 créditos)\n` +
-    `▸ \`/quiz start hard\` — Quiz difícil (🔴 200.000 créditos)\n` +
-    `▸ \`/quiz stop\` — Cancela el quiz actual\n\n` +
-    `🎮 *Cómo funciona:*\n` +
-    `• Tenés ${secs} segundos para votar en el poll\n` +
-    `• Solo cuenta tu primera respuesta\n` +
-    `• El premio se divide entre todos los que acierten`
-  );
-}
-
 // ─── VOTOS DE POLL (escuchado desde index.js via message_create type poll_vote) ───
 // whatsapp-web.js expone los votos como mensajes con type === 'poll_vote'
 // groupId es el from del voto, selectedOptions es un array de índices
@@ -259,7 +183,6 @@ async function handleQuizPollVote(voteMessage, client) {
 }
 
 module.exports = {
-  handleQuizCommand,
   handleQuizPollVote,
   getActiveQuiz,
   createQuiz,
@@ -267,4 +190,5 @@ module.exports = {
   sendQuiz,
   QUIZ_PRIZES,
   QUIZ_BANK,
+  getTimeLimit
 };
