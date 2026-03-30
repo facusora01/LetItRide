@@ -24,6 +24,14 @@ const QUIZ_DAYS = process.env.QUIZ_DAYS || "1,2,3,4,5"; // Lunes a Viernes por d
 const QUIZ_START_HOUR = parseInt(process.env.QUIZ_START_HOUR) || 10;
 const QUIZ_END_HOUR = parseInt(process.env.QUIZ_END_HOUR) || 22;
 
+// Debug: mostrar configuración de quizzes
+console.log(`🧠 Configuración Quizzes: ${QUIZ_ENABLED ? 'ACTIVADO' : 'DESACTIVADO'}`);
+if (QUIZ_ENABLED) {
+  console.log(`   • Quizzes por día: ${QUIZ_DAILY_COUNT}`);
+  console.log(`   • Días: ${QUIZ_DAYS}`);
+  console.log(`   • Horario: ${QUIZ_START_HOUR}:00 - ${QUIZ_END_HOUR}:00`);
+}
+
 // ─── CLIENTE WHATSAPP ─────────────────────────────────────────────────────────
 const client = new Client({
   authStrategy: new LocalAuth({
