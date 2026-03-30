@@ -472,22 +472,39 @@ async function handleQuizPollReaction(reaction, client) {
   const senderId = reaction.senderId;
   const emoji = reaction.reaction;
   
+  // Obtener el ID del mensaje reaccionado (puede estar en msgId o message.id)
+  const reactionMsgId = reaction.msgId?._serialized || reaction.message.id?._serialized;
+  if (!reactionMsgId) {
+    console.log("⚠️ No se pudo obtener el ID del mensaje de la reacción");
+    return;
+  }
+  
+  // Debug: mostrar info de la reacción recibida
+  console.log(`🔍 Reacción recibida: ${emoji} de ${senderId} en msg ${reactionMsgId.substring(0, 20)}...`);
+  
   // Verificar si es un quiz activo
   const quizData = getActiveQuiz(from);
   if (quizData && quizData.status === 'active') {
+    console.log(`🔍 Quiz activo encontrado. QuizMessageId: ${quizData.quizMessageId?.substring(0, 20)}...`);
+    
     // Verificar si la reacción es para el mensaje del quiz
-    if (quizData.quizMessageId && reaction.message.id._serialized !== quizData.quizMessageId) {
+    if (quizData.quizMessageId && reactionMsgId !== quizData.quizMessageId) {
+      console.log(`⚠️ ID no coincide. Esperado: ${quizData.quizMessageId?.substring(0, 20)}..., Recibido: ${reactionMsgId.substring(0, 20)}...`);
       return;
     }
     
     // Verificar si el tiempo ha expirado (15 segundos)
     if (Date.now() - quizData.startTime > QUIZ_TIME_LIMIT) {
+      console.log(`⚠️ Tiempo expirado para quiz`);
       return;
     }
     
     // Verificar si el emoji es una resp válida (1️⃣ 2️⃣ 3️⃣ 4️⃣)
     const optionIndex = EMOJI_TO_INDEX[emoji];
-    if (optionIndex === undefined) return;
+    if (optionIndex === undefined) {
+      console.log(`⚠️ Emoji no reconocido: ${emoji} (código: ${emoji?.charCodeAt(0)})`);
+      return;
+    }
     
     // Convertir índice a letra (0 -> A, 1 -> B, etc.)
     const answerLetter = INDEX_TO_LETTER[optionIndex];
@@ -495,7 +512,9 @@ async function handleQuizPollReaction(reaction, client) {
     // Registrar la respuesta
     const success = submitAnswer(from, senderId, answerLetter);
     if (success) {
-      console.log(`🧠 Respuesta de quiz: ${senderId} -> ${answerLetter}`);
+      console.log(`🧠 Respuesta de quiz registrada: ${senderId} -> ${answerLetter}`);
+    } else {
+      console.log(`⚠️ No se pudo registrar respuesta de ${senderId} (¿ya había respondido?)`);
     }
     return;
   }
