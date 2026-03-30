@@ -19,10 +19,10 @@ const QUIZ_TIME_LIMIT = 15000; // 15 segundos fijos
 
 // Mapa de emojis a índices de respuesta
 const EMOJI_TO_INDEX = {
-  '1️⃣': 0, '1': 0,
-  '2️⃣': 1, '2': 1, 
-  '3️⃣': 2, '3': 2,
-  '4️⃣': 3, '4': 3
+  '1️⃣': 0, '1': 0, '1⃣': 0,
+  '2️⃣': 1, '2': 1, '2⃣': 1,
+  '3️⃣': 2, '3': 2, '3⃣': 2,
+  '4️⃣': 3, '4': 3, '4⃣': 3
 };
 
 const INDEX_TO_LETTER = ['A', 'B', 'C', 'D'];
