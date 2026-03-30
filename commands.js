@@ -318,39 +318,54 @@ async function executeConfirmedGive(pending, client) {
 
 async function handlePollReaction(reaction, client) {
   try {
-    // Verificar que reaction.message existe
-    if (!reaction.message) {
-      return;
-    }
+    // Extractor Universal
+    const rawId = reaction.msgId?._serialized || reaction.msgId?.id || reaction.msgId || "";
+    const strId = typeof rawId === 'object' ? JSON.stringify(rawId) : String(rawId);
     
-    const msgId = reaction.msgId?._serialized;
-    if (!msgId) return;
+    const parts = strId.split(/[_"]/);
+    const baseId = parts.find(p => p.length > 15 && /^[A-F0-9]+$/i.test(p)) || strId;
 
     // ── 1. Confirmación de apuestas ajustadas por reacción ──
-    if (pendingBetReactions.has(msgId)) {
-      const betInfo = pendingBetReactions.get(msgId);
-      if (reaction.senderId === betInfo.userId && THUMB_UP_VARIATIONS.includes(reaction.reaction)) {
-        clearTimeout(betInfo.timeoutId);
-        pendingBetReactions.delete(msgId);
-        await executeConfirmedBet(betInfo, client);
+    let betMatch = null;
+    let betKey = null;
+    for (const [key, betInfo] of pendingBetReactions.entries()) {
+      const bParts = key.split('_');
+      const bId = bParts.find(p => p.length > 15 && /^[A-F0-9]+$/i.test(p)) || key;
+      if (bId === baseId) { betMatch = betInfo; betKey = key; break; }
+    }
+    if (betMatch) {
+      if (reaction.senderId === betMatch.userId && THUMB_UP_VARIATIONS.includes(reaction.reaction)) {
+        clearTimeout(betMatch.timeoutId);
+        pendingBetReactions.delete(betKey);
+        await executeConfirmedBet(betMatch, client);
       }
-      return; // Detenemos la ejecución si era de apuestas
+      return; 
     }
 
     // ── 2. Confirmación de transferencias / regalos ──
-    if (pendingConfirmations.has(msgId)) {
-      const pending = pendingConfirmations.get(msgId);
-      if (reaction.senderId === pending.userId && THUMB_UP_VARIATIONS.includes(reaction.reaction)) {
-        clearTimeout(pending.timeoutId);
-        pendingConfirmations.delete(msgId);
-        await executeConfirmedGive(pending, client);
+    let confMatch = null;
+    let confKey = null;
+    for (const [key, pending] of pendingConfirmations.entries()) {
+      const cParts = key.split('_');
+      const cId = cParts.find(p => p.length > 15 && /^[A-F0-9]+$/i.test(p)) || key;
+      if (cId === baseId) { confMatch = pending; confKey = key; break; }
+    }
+    if (confMatch) {
+      if (reaction.senderId === confMatch.userId && THUMB_UP_VARIATIONS.includes(reaction.reaction)) {
+        clearTimeout(confMatch.timeoutId);
+        pendingConfirmations.delete(confKey);
+        await executeConfirmedGive(confMatch, client);
       }
-      return; // Detenemos la ejecución
+      return; 
     }
 
     // ── 3. Votación de inicio de partida (/casino start) ──
     for (const [groupId, poll] of pendingPolls.entries()) {
-      if (poll.msgId !== msgId) continue;
+      const pParts = poll.msgId.split('_');
+      const pollBaseId = pParts.find(p => p.length > 15 && /^[A-F0-9]+$/i.test(p)) || poll.msgId;
+      
+      if (pollBaseId !== baseId) continue;
+      
       const voterId = reaction.senderId;
       if (!voterId) break;
       
@@ -369,7 +384,7 @@ async function handlePollReaction(reaction, client) {
         pendingPolls.delete(groupId);
         console.log(`✅ Umbral alcanzado en ${groupId} — lanzando juego`);
         await client.sendMessage(groupId,
-          `✅ *¡Votación aprobada!* ${poll.yesVoters.size}/${poll.needed} votos 🎉\n¡La partida arranca ya!`
+          `✅ *¡Votación aprobada!* ${poll.yesVoters.size}/${poll.needed} votos 🎉\n¡La partida arranca ya!` 
         );
         const grp = db.getGroup(groupId);
         await launchGame(client, groupId, grp?.group_name || '');

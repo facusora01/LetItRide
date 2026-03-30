@@ -175,24 +175,27 @@ client.on("ready", async () => {
 
 // ─── LISTENER DE REACCIONES (para el poll de /casino start y quizzes) ──────────────────
 client.on("message_reaction", async (reaction) => {
-  console.log(`🔔🔔🔔 REACTION EVENT 🔥🔥🔥`, JSON.stringify({
+  // 1. Filtro Anti-Backlog: Ignorar reacciones de antes de prender el bot
+  if (reaction.timestamp && reaction.timestamp < startupTime) return;
+
+  // 2. Filtro Anti-Fantasmas: Ignorar cuando un usuario quita su reacción (llega vacío)
+  if (!reaction.reaction || reaction.reaction.trim() === '') return;
+
+  console.log(`🔔 REACTION EVENT 🔥`, JSON.stringify({
     emoji: reaction.reaction,
     sender: reaction.senderId,
-    msgId: reaction.msgId?._serialized,
-    hasMessage: !!reaction.message,
-    msgFrom: reaction.message?.from
+    msgId: reaction.msgId?._serialized
   }));
   
   try {
-    // 1. Procesa votaciones de inicio (/casino start)
+    // 3. Procesa votaciones de inicio (/casino start), confirmaciones de regalos y apuestas
     await handlePollReaction(reaction, client);
     
-    // 2. Procesa respuestas de quizzes (reacciones 1️⃣2️⃣3️⃣4️⃣)
+    // 4. Procesa respuestas de quizzes (reacciones 1️⃣2️⃣3️⃣4️⃣)
     await handleQuizPollReaction(reaction, client);
     
-    // 3. Procesa confirmaciones de apuestas y regalos
-    const reactorId = reaction.senderId; 
-    await handleBetReaction(client, reaction, reactorId); 
+    // NOTA: Borramos la llamada a handleBetReaction porque handlePollReaction 
+    // ya se encarga de todo el flujo de apuestas correctamente.
   } catch (err) {
     console.error("❌ Error en message_reaction:", err.message);
   }

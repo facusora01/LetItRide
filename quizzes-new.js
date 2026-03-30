@@ -375,21 +375,24 @@ ${isAdmin ? '👑 *Como admin, tienes control total sobre los quizzes.*' : '💪
   
   await client.sendMessage(from, helpMessage);
 }
-
-// ─── DISTRIBUCIÓN DE CRÉDITOS ───────────────────────────────────────────────────
 async function distributePrizes(client, groupId, results) {
   if (results.winners === 0) return;
   
-  const { winners, prizePerWinner } = results;
+  // SOLUCIÓN: results.winners es un número. Extraemos los IDs reales de allResponses.
+  const winnerIds = results.allResponses
+    .filter(r => r.isCorrect)
+    .map(r => r.userId);
+    
+  const prizePerWinner = results.prizePerWinner;
   const successMessages = [];
   
-  for (const userId of winners) {
+  for (const userId of winnerIds) {
     try {
       const user = db.getOrCreateUser(userId, groupId);
       const newBalance = db.updateUserCredits(userId, groupId, prizePerWinner, 'quiz_win', 
         `Ganaste quiz - ${prizePerWinner} créditos`);
       
-      successMessages.push(`🏆 ${user.username || 'Usuario'}: +${prizePerWinner} créditos`);
+      successMessages.push(`🏆 ${user.username || 'Usuario'}: +${prizePerWinner.toLocaleString()} créditos`);
     } catch (error) {
       console.error(`Error al dar premio a ${userId}:`, error.message);
     }
@@ -484,38 +487,56 @@ async function handleQuizPollReaction(reaction, client) {
   const senderId = reaction.senderId;
   const emoji = reaction.reaction;
   
-  // Obtener el ID del mensaje reaccionado (igual que handlePollReaction)
-  const msgId = reaction.msgId?._serialized;
-  if (!msgId) return;
+  // 1. Intentar extraer los datos venga como venga
+  const rawId = reaction.msgId?._serialized || reaction.msgId?.id || reaction.msgId || "";
+  const strId = typeof rawId === 'object' ? JSON.stringify(rawId) : String(rawId);
+  const baseId = strId.split(/[_"]/).find(p => p.length > 15 && /^[A-F0-9]+$/i.test(p)) || strId;
   
-  // Buscar quiz por msgId (igual que pendingBetReactions en handlePollReaction)
-  const pendingQuiz = pendingQuizReactions.get(msgId);
-  if (!pendingQuiz) return; // No es un quiz activo
-  
-  const { groupId, quizData, startTime } = pendingQuiz;
-  
-  // Verificar si el tiempo ha expirado (15 segundos)
-  if (Date.now() - startTime > QUIZ_TIME_LIMIT) {
-    console.log(`⚠️ Tiempo expirado para quiz`);
-    return;
+  // Intentar deducir el grupo si el ID vino roto
+  const reactionGroupId = reaction.msgId?.remote || (strId.includes('@g.us') ? strId.split('_').find(p => p.includes('@g.us')) : null);
+
+  let targetQuiz = null;
+
+  // 2. ESTRATEGIA DE MATCHEO TRIPLE
+  for (const [key, pending] of pendingQuizReactions.entries()) {
+    const quizBaseId = key.split('_').find(p => p.length > 15 && /^[A-F0-9]+$/i.test(p)) || key;
+    
+    // A) Matcheo exacto por Hash del mensaje
+    if (baseId && baseId === quizBaseId) {
+      targetQuiz = pending;
+      break;
+    }
+    // B) Matcheo por Grupo (Como solo hay 1 quiz por grupo a la vez, esto es 100% seguro)
+    if (reactionGroupId && pending.groupId === reactionGroupId) {
+      targetQuiz = pending;
+      break;
+    }
   }
+
+  // C) Fallback Extremo: Si falló todo, pero sabemos que hay UN SOLO quiz corriendo en todo el bot
+  if (!targetQuiz && pendingQuizReactions.size === 1) {
+    targetQuiz = pendingQuizReactions.values().next().value;
+  }
+
+  if (!targetQuiz) return; // Si no hay match posible, ignoramos
+
+  const { groupId, quizData } = targetQuiz;
   
-  // Verificar si el emoji es una resp válida (1️⃣ 2️⃣ 3️⃣ 4️⃣)
+  // FIX AL BUG DE TIEMPO: Forzar los 15 segundos para que "submitAnswer" no lo rechace injustamente
+  quizData.timeLimit = 15000; 
+
+  // Verificar si el emoji es una opción válida (1️⃣ 2️⃣ 3️⃣ 4️⃣)
   const optionIndex = EMOJI_TO_INDEX[emoji];
-  if (optionIndex === undefined) {
-    console.log(`⚠️ Emoji no reconocido: ${emoji}`);
-    return;
-  }
+  if (optionIndex === undefined) return;
   
   // Convertir índice a letra (0 -> A, 1 -> B, etc.)
   const answerLetter = INDEX_TO_LETTER[optionIndex];
   
   // Registrar la respuesta
   const success = submitAnswer(groupId, senderId, answerLetter);
+  
   if (success) {
-    console.log(`✅✅✅ RESPUESTA REGISTRADA: ${senderId} -> ${answerLetter} en grupo ${groupId}`);
-  } else {
-    console.log(`⚠️ No se pudo registrar respuesta de ${senderId} (¿ya había respondido?)`);
+    console.log(`✅ RESPUESTA REGISTRADA: Voto por la ${answerLetter} en ${groupId}`);
   }
 }
 
