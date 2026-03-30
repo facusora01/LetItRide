@@ -25,12 +25,13 @@ const client = new Client({
   puppeteer: {
     headless: true,
     executablePath: process.env.CHROMIUM_PATH || undefined,
+    browser: process.env.BROWSER_TYPE || "chrome", // "firefox" o "chrome"
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
 
       "--disable-dev-shm-usage",       // Usa /tmp en lugar de memoria compartida
-      "--js-flags='--max-old-space-size=512'",
+      "--js-flags='--max-old-space-size=256'",  // Reducido de 512 a 256
       "--single-process",              // Corre todo en un solo hilo (ahorra CPU y RAM)
       "--no-zygote",                   // Evita procesos hijos pesados
 
@@ -45,8 +46,15 @@ const client = new Client({
       "--disable-renderer-backgrounding",
       
       "--proxy-server='direct://'",
-      "--proxy-bypass-list=*"
-],
+      "--proxy-bypass-list=*",
+      
+      // Flags adicionales para reducir consumo
+      "--disable-background-networking",
+      "--disable-default-apps",
+      "--disable-features=TranslateUI,BlinkGenPropertyTrees",
+      "--disable-ipc-flooding-protection",
+      "--enable-features=NetworkService,NetworkServiceInProcess"
+    ],
   },
 });
 
@@ -202,6 +210,13 @@ async function processMessage(message) {
 
     await handleCommand(message, client);
   } catch (error) {
+    // Ignorar errores de Chrome/Puppeteer que son temporales
+    if (error.message.includes("Target closed") || 
+        error.message.includes("Protocol error") || 
+        error.message.includes("Session closed")) {
+      console.log("⚠️ Error temporal de Chrome/Puppeteer - ignorando");
+      return;
+    }
     console.error("❌ Error en processMessage:", error.message);
   }
 }
@@ -209,6 +224,13 @@ async function processMessage(message) {
 client.on("message_create", (message) => {
 
   processMessage(message).catch(err => {
+    // Ignorar errores temporales de Chrome/Puppeteer
+    if (err.message.includes("Target closed") || 
+        err.message.includes("Protocol error") || 
+        err.message.includes("Session closed")) {
+      console.log("⚠️ Error temporal en message_create - ignorando");
+      return;
+    }
     console.error("❌ Error asíncrono en processMessage:", err.message);
   });
 });
