@@ -1,4 +1,5 @@
 const db = require("./database");
+const { Poll } = require("whatsapp-web.js");
 const { 
   getRandomQuiz, 
   createQuiz, 
@@ -152,26 +153,22 @@ async function startQuizDirectly(groupId, difficulty, client) {
     const pollOptions = createPollOptions(quizData.quiz);
     
     try {
-      // Enviar como poll
-      const pollMessage = await client.sendMessage(groupId, quizMessage, {
-        poll: {
-          name: quizData.quiz.question,
-          options: pollOptions,
-          allowMultipleAnswers: false
-        }
-      });
+      // Enviar mensaje informativo primero
+      await client.sendMessage(groupId, quizMessage);
+
+      // Enviar poll nativo de WhatsApp
+      const poll = new Poll(quizData.quiz.question, pollOptions, { allowMultipleAnswers: false });
+      const pollMessage = await client.sendMessage(groupId, poll);
       
       // Guardar el ID del mensaje del poll
       quizData.pollMessageId = pollMessage.id._serialized;
       
-      console.log(`🧠 Quiz poll creado por admin: ${quizData.pollMessageId}`);
+      console.log(`🧠 Quiz poll creado: ${quizData.pollMessageId}`);
       
     } catch (error) {
       console.error("Error creando poll:", error.message);
-      
-      // Fallback: enviar mensaje normal
-      const fallbackMessage = quizMessage + "\n\n" + pollOptions.join("\n");
-      await client.sendMessage(groupId, fallbackMessage);
+      // Fallback: enviar opciones como texto
+      await client.sendMessage(groupId, pollOptions.join("\n"));
     }
     
     // Configurar timeout para terminar el quiz automáticamente
@@ -199,22 +196,17 @@ async function startQuizPoll(groupId, difficulty, message, client) {
     const emoji = difficulty === 'easy' ? '🟢' : difficulty === 'normal' ? '🟡' : '🔴';
     const prize = QUIZ_PRIZES[difficulty];
     
-    const pollMessage = await client.sendMessage(groupId, 
+    await client.sendMessage(groupId, 
       `🧠 *SOLICITUD DE QUIZ* 🗳️\n\n` +
       `${emoji} *Dificultad:* ${difficulty === 'easy' ? 'Fácil' : difficulty === 'normal' ? 'Normal' : 'Difícil'}\n` +
       `💰 *Premio total:* ${prize.toLocaleString()} créditos\n` +
       `⏱️ *Tiempo límite:* ${process.env.QUIZ_TIME_LIMIT || 10} segundos\n\n` +
       `📊 *Votación requerida:* ${requiredVotes} votos (${Math.round(QUIZ_THRESHOLD * 100)}% del grupo)\n\n` +
-      `👍 *VOTA AQUÍ* si quieres que inicie el quiz\n` +
-      `👎 *O ignora este mensaje* si no quieres participar`,
-      {
-        poll: {
-          name: `¿Iniciar quiz ${difficulty}?`,
-          options: ["👍 Sí, iniciar quiz", "👎 No, gracias"],
-          allowMultipleAnswers: false
-        }
-      }
+      `👇 Votá en el poll de abajo para iniciar el quiz`
     );
+
+    const votePoll = new Poll(`¿Iniciar quiz ${difficulty}?`, ["👍 Sí, iniciar quiz", "👎 No, gracias"], { allowMultipleAnswers: false });
+    const pollMessage = await client.sendMessage(groupId, votePoll);
     
     // Guardar datos del poll
     const pollData = {

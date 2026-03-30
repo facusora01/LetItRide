@@ -5,15 +5,13 @@ const { MessageMedia, Poll } = require("whatsapp-web.js");
 const path = require("path");
 const fs = require("fs");
 const { 
-  getActiveQuiz, 
-  createQuiz, 
-  finishQuiz, 
-  sendQuiz,
+  handleQuizCommand,
   handleQuizPollVote,
+  handleQuizPollReaction,
+  getActiveQuiz,
+  finishQuiz,
   QUIZ_PRIZES,
-  QUIZ_CATEGORIES,
-  getTimeLimit 
-} = require("./quizzes");
+} = require("./quizzes-new");
 
 const CREDIT_DAY = parseInt(process.env.CREDIT_DAY) || 5;
 const BET_DURATION = parseInt(process.env.BET_DURATION) || 4; // minutos de apuestas
@@ -1301,74 +1299,7 @@ async function handleBetReaction(reaction, client) {
   }
 }
 
-// ─── COMANDOS DE QUIZ ────────────────────────────────────────────────────────────
-async function handleQuizCommand(message, client) {
-  const body = message.body.trim().toLowerCase();
-  const from = message.fromMe ? message.to : message.from;
-  const parts = body.split(' ');
-  const sub = parts[1];
 
-  if (sub === 'start') return handleQuizStart(message, client, parts);
-  if (sub === 'stop')  return handleQuizStop(message, client);
-  return handleQuizHelp(message, client);
-}
-
-async function handleQuizStart(message, client, parts) {
-  const from = message.fromMe ? message.to : message.from;
-
-  // Solo admins pueden iniciar quizzes
-  const isUserAdmin = await isAdmin(message, client);
-  if (!isUserAdmin) {
-    return client.sendMessage(from,
-      "🔒 *Solo los admins pueden iniciar quizzes.*\n" +
-      "Pedí a un admin que lo inicie por vos.");
-  }
-
-  if (getActiveQuiz(from)) {
-    return client.sendMessage(from,
-      "⚠️ *Ya hay un quiz activo.*\nUsá `/quiz stop` para cancelarlo.");
-  }
-
-  let difficulty = 'normal';
-  if (parts[2]) {
-    if (['easy', 'facil', 'fácil'].includes(parts[2])) difficulty = 'easy';
-    else if (['hard', 'dificil', 'difícil'].includes(parts[2])) difficulty = 'hard';
-  }
-
-  const quizData = createQuiz(from, difficulty);
-  if (!quizData) return client.sendMessage(from, "❌ No se pudo crear el quiz.");
-
-  await sendQuiz(client, from, quizData);
-
-  // Auto-cierre
-  setTimeout(async () => {
-    const q = getActiveQuiz(from);
-    if (q && q.status === 'active') await finishQuiz(from, client);
-  }, quizData.timeLimit);
-}
-
-async function handleQuizStop(message, client) {
-  const from = message.fromMe ? message.to : message.from;
-  if (!getActiveQuiz(from))
-    return client.sendMessage(from, "⚠️ *No hay ningún quiz activo.*");
-  await finishQuiz(from, client);
-}
-
-async function handleQuizHelp(message, client) {
-  const from = message.fromMe ? message.to : message.from;
-  const secs = getTimeLimit();
-  await client.sendMessage(from,
-    `🎯 *COMANDOS DE QUIZ* 🎯\n\n` +
-    `▸ \`/quiz start\` — Quiz normal (🟡 100.000 créditos)\n` +
-    `▸ \`/quiz start easy\` — Quiz fácil (🟢 50.000 créditos)\n` +
-    `▸ \`/quiz start hard\` — Quiz difícil (🔴 200.000 créditos)\n` +
-    `▸ \`/quiz stop\` — Cancela el quiz actual\n\n` +
-    `🎮 *Cómo funciona:*\n` +
-    `• Tenés ${secs} segundos para votar en el poll\n` +
-    `• Solo cuenta tu primera respuesta\n` +
-    `• El premio se divide entre todos los que acierten`
-  );
-}
 
 module.exports = { 
   handleCommand, 
@@ -1376,5 +1307,6 @@ module.exports = {
   handleBetReaction, 
   launchGame,
   handleQuizCommand,
-  handleQuizPollVote 
+  handleQuizPollVote,
+  handleQuizPollReaction
 };

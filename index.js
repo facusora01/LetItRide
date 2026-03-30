@@ -16,34 +16,8 @@ const CREDIT_DAY = parseInt(process.env.CREDIT_DAY) || 5;
 const DAY_NAMES = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
 const creditDayName = DAY_NAMES[CREDIT_DAY];
 
-// Configuración de Quizzes Automáticos
-const QUIZ_ENABLED = process.env.QUIZ_ENABLED === "true";
-const QUIZ_DAILY_COUNT = parseInt(process.env.QUIZ_DAILY_COUNT) || 3;
-const QUIZ_DAYS = process.env.QUIZ_DAYS || "1,2,3,4,5"; // Lunes a Viernes por defecto
-const QUIZ_START_HOUR = parseInt(process.env.QUIZ_START_HOUR) || 10;
-const QUIZ_END_HOUR = parseInt(process.env.QUIZ_END_HOUR) || 22;
-const QUIZ_TIME_LIMIT = parseInt(process.env.QUIZ_TIME_LIMIT) || 10; // Tiempo límite en segundos
-
-// Configuración de API de Quizzes
-const QUIZ_API_ENABLED = process.env.QUIZ_API_ENABLED === "true";
-const QUIZ_API_URL = process.env.QUIZ_API_URL || "https://opentdb.com/api.php";
-const QUIZ_API_TIMEOUT = parseInt(process.env.QUIZ_API_TIMEOUT) || 5000;
-const QUIZ_API_FALLBACK = process.env.QUIZ_API_FALLBACK !== "false";
-
-// Debug: mostrar configuración de quizzes
-console.log(`🧠 Configuración Quizzes: ${QUIZ_ENABLED ? 'ACTIVADO' : 'DESACTIVADO'}`);
-if (QUIZ_ENABLED) {
-  console.log(`   • Quizzes por día: ${QUIZ_DAILY_COUNT}`);
-  console.log(`   • Días: ${QUIZ_DAYS}`);
-  console.log(`   • Horario: ${QUIZ_START_HOUR}:00 - ${QUIZ_END_HOUR}:00`);
-  console.log(`   • Tiempo límite: ${QUIZ_TIME_LIMIT} segundos`);
-  console.log(`   • API Externa: ${QUIZ_API_ENABLED ? 'ACTIVADA' : 'DESACTIVADA'}`);
-  if (QUIZ_API_ENABLED) {
-    console.log(`   • URL API: ${QUIZ_API_URL}`);
-    console.log(`   • Timeout: ${QUIZ_API_TIMEOUT}ms`);
-    console.log(`   • Fallback local: ${QUIZ_API_FALLBACK ? 'SÍ' : 'NO'}`);
-  }
-}
+// Quizzes: solo activación manual por /quiz start (superadmin)
+console.log("🧠 Quizzes: modo manual activado");
 
 // ─── CLIENTE WHATSAPP ─────────────────────────────────────────────────────────
 const client = new Client({
@@ -194,116 +168,25 @@ client.on("ready", async () => {
     }
   }, { timezone: "America/Argentina/Buenos_Aires" });
 
-  // ─── QUIZZES AUTOMÁTICOS ───────────────────────────────────────────────────────
-  if (QUIZ_ENABLED) {
-    console.log("🧠 Sistema de quizzes automáticos activado");
-    
-    // Scheduler para quizzes aleatorios - se ejecuta cada hora para verificar si toca un quiz
-    cron.schedule("0 * * * *", async () => {
-      const now = new Date();
-      const currentDay = now.getDay();
-      const currentHour = now.getHours();
-      
-      // Verificar si es día de quiz y está en el rango horario
-      const quizDays = QUIZ_DAYS.split(',').map(d => parseInt(d.trim()));
-      if (!quizDays.includes(currentDay) || currentHour < QUIZ_START_HOUR || currentHour > QUIZ_END_HOUR) {
-        return;
-      }
-      
-      // Verificar cuántos quizzes se han hecho hoy
-      const todayStart = new Date(now);
-      todayStart.setHours(0, 0, 0, 0);
-      const todayEnd = new Date(now);
-      todayEnd.setHours(23, 59, 59, 999);
-      
-      for (const group of db.getActiveGroups()) {
-        try {
-          // Contar quizzes de hoy para este grupo
-          const todayQuizzes = db.getQuizHistory(group.group_id)
-            .filter(q => new Date(q.created_at) >= todayStart && new Date(q.created_at) <= todayEnd)
-            .length;
-          
-          // Probabilidad de iniciar quiz (basado en cuántos faltan y horas restantes)
-          const remainingQuizzes = QUIZ_DAILY_COUNT - todayQuizzes;
-          const remainingHours = QUIZ_END_HOUR - currentHour;
-          
-          if (remainingQuizzes > 0 && remainingHours > 0) {
-            const probability = remainingQuizzes / remainingHours;
-            const shouldStartQuiz = Math.random() < probability;
-            
-            if (shouldStartQuiz && todayQuizzes < QUIZ_DAILY_COUNT) {
-              console.log(`🧠 Quiz automático iniciando para ${group.group_name} (${todayQuizzes + 1}/${QUIZ_DAILY_COUNT})`);
-              
-              // Seleccionar dificultad aleatoria
-              const difficulties = ['easy', 'normal', 'hard'];
-              const weights = [0.4, 0.4, 0.2]; // 40% fácil, 40% normal, 20% difícil
-              const random = Math.random();
-              let difficulty = 'normal';
-              
-              let cumulative = 0;
-              for (let i = 0; i < difficulties.length; i++) {
-                cumulative += weights[i];
-                if (random <= cumulative) {
-                  difficulty = difficulties[i];
-                  break;
-                }
-              }
-              
-              await client.sendMessage(group.group_id,
-                `🧠 *QUIZ AUTOMÁTICO* 🎯\n\n` +
-                `🎲 *Dificultad:* ${difficulty === 'easy' ? '🟢 Fácil' : difficulty === 'normal' ? '🟡 Normal' : '🔴 Difícil'}\n` +
-                `⏰ ¡Arranca ahora! Responde rápido con A, B, C o D.`
-              );
-              
-              // Crear y ejecutar quiz
-              const quizData = await createRandomQuiz(group.group_id, difficulty);
-              if (quizData) {
-                const { formatQuizMessage, createPollOptions } = require("./quizzes-new");
-                const quizMessage = formatQuizMessage(quizData.quiz);
-                const pollOptions = createPollOptions(quizData.quiz);
-                
-                try {
-                  // Enviar mensaje informativo primero
-                  await client.sendMessage(group.group_id, quizMessage);
-                  
-                  // Enviar poll nativo usando new Poll()
-                  const { Poll } = require("whatsapp-web.js");
-                  await client.sendMessage(group.group_id, quizMessage);
-                  const poll = new Poll(quizData.quiz.question, pollOptions, { allowMultipleAnswers: false });
-                  const pollMessage = await client.sendMessage(group.group_id, poll);
-                  
-                  // Guardar el ID del mensaje del poll
-                  quizData.pollMessageId = pollMessage.id._serialized;
-                  
-                } catch (error) {
-                  console.error("Error creando poll automático:", error.message);
-                  
-                  // Fallback: enviar mensaje normal
-                  const fallbackMessage = quizMessage + "\n\n" + pollOptions.join("\n");
-                  await client.sendMessage(group.group_id, fallbackMessage);
-                }
-                
-                // Auto-terminar después del tiempo límite
-                setTimeout(async () => {
-                  await finishQuiz(group.group_id, client);
-                }, quizData.timeLimit);
-              }
-            }
-          }
-        } catch (error) {
-          console.error(`Error en quiz automático para ${group.group_name}:`, error.message);
-        }
-      }
-    }, { timezone: "America/Argentina/Buenos_Aires" });
-  }
+  // Los quizzes se activan SOLO por comando /quiz start (superadmin)
+  console.log("🧠 Quizzes: activación manual únicamente (/quiz start)");
 });
 
 // ─── LISTENER DE REACCIONES (para el poll de /casino start y quizzes) ──────────────────
 client.on("message_reaction", async (reaction) => {
   try {
+    // 1. Procesa votaciones de inicio (/casino start)
     await handlePollReaction(reaction, client);
+    
+    // 2. Procesa respuestas de polls de quizzes
+    await handleQuizPollReaction(reaction, client);
+    
+    // 3. Procesa votaciones de inicio de quizzes
     await handleQuizPollVote(reaction, client);
-    await handleBetReaction(reaction, client);         // ✅ orden correcto
+    
+    // 4. Procesa confirmaciones de apuestas y regalos
+    const reactorId = reaction.senderId; 
+    await handleBetReaction(client, reaction, reactorId); 
   } catch (err) {
     console.error("❌ Error en message_reaction:", err.message);
   }
