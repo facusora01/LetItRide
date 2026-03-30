@@ -473,6 +473,12 @@ async function processQuizAnswer(message, client) {
 
 // ─── MANEJO DE POLLS DE QUIZ ─────────────────────────────────────────────────────
 async function handleQuizPollReaction(reaction, client) {
+  // Verificar que reaction.message existe
+  if (!reaction.message) {
+    console.log("⚠️ Poll reaction sin mensaje asociado - ignorando");
+    return;
+  }
+  
   const from = reaction.message.from;
   const senderId = reaction.senderId;
   
@@ -516,6 +522,12 @@ async function handleQuizPollReaction(reaction, client) {
 
 // ─── MANEJO DE VOTACIÓN DE QUIZ POLL ─────────────────────────────────────────────
 async function handleQuizPollVote(reaction, client) {
+  // Verificar que reaction.message existe
+  if (!reaction.message) {
+    console.log("⚠️ Quiz poll vote sin mensaje asociado - ignorando");
+    return;
+  }
+  
   const from = reaction.message.from;
   const senderId = reaction.senderId;
   

@@ -311,6 +311,12 @@ async function executeConfirmedGive(pending, client) {
 
 async function handlePollReaction(reaction, client) {
   try {
+    // Verificar que reaction.message existe
+    if (!reaction.message) {
+      console.log("⚠️ Poll reaction sin mensaje asociado - ignorando");
+      return;
+    }
+    
     const msgId = reaction.msgId?._serialized;
     if (!msgId) return;
 
