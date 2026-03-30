@@ -105,16 +105,22 @@ client.on("auth_failure", (msg) => console.error("❌ Error de autenticación:",
 client.on("ready", async () => {
   try {
     const page = client.pupPage;
-    await page.setRequestInterception(true);
-    page.on('request', (request) => {
-      const type = request.resourceType();
-      if (['image', 'stylesheet', 'font', 'media'].includes(type)) {
-        request.abort();
-      } else {
-        request.continue();
-      }
-    });
-    console.log("⚡ Optimización de recursos activa: Imágenes y Estilos bloqueados.");
+    
+    // Solo optimizar recursos si NO es Firefox (Chrome/Chromium sí lo soportan)
+    if (process.env.BROWSER_TYPE !== 'firefox') {
+      await page.setRequestInterception(true);
+      page.on('request', (request) => {
+        const type = request.resourceType();
+        if (['image', 'stylesheet', 'font', 'media'].includes(type)) {
+          request.abort();
+        } else {
+          request.continue();
+        }
+      });
+      console.log("⚡ Optimización de recursos activa: Imágenes y Estilos bloqueados.");
+    } else {
+      console.log("ℹ️  Optimización de recursos omitida (Firefox no soporta resourceType).");
+    }
   } catch (e) {
     console.error("⚠️ No se pudo activar la optimización de Puppeteer:", e.message);
   }
