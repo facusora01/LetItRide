@@ -221,7 +221,7 @@ function updateGroupSettings(groupId, settings) {
     settings.weekly_credits || DEFAULT_WEEKLY_CREDITS,
     settings.game_schedule || '20:00',
     settings.game_days || '1,3,5',
-    settings.min_bet || 10,
+    settings.min_bet || 100,
     settings.max_bet || 500,
     settings.auto_payout !== undefined ? settings.auto_payout : 1,
     groupId

@@ -6,7 +6,6 @@ const path = require("path");
 const fs = require("fs");
 const { 
   handleQuizCommand,
-  handleQuizPollVote,
   handleQuizPollReaction,
   getActiveQuiz,
   finishQuiz,
@@ -1307,6 +1306,5 @@ module.exports = {
   handleBetReaction, 
   launchGame,
   handleQuizCommand,
-  handleQuizPollVote,
   handleQuizPollReaction
 };

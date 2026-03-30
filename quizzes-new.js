@@ -1,5 +1,4 @@
 const db = require("./database");
-const { Poll } = require("whatsapp-web.js");
 const { 
   getRandomQuiz, 
   createQuiz, 
@@ -13,9 +12,20 @@ const {
   QUIZ_PRIZES 
 } = require("./quiz-manager");
 
-// ─── CONFIGURACIÓN DE ADMINS ─────────────────────────────────────────────────────
+// ─── CONFIGURACIÓN ────────────────────────────────────────────────────────────
 const SUPER_ADMINS = ["5491100000000", "541100000000", "100000000000000"];
 const QUIZ_THRESHOLD = parseFloat(process.env.QUIZ_THRESHOLD) || 0.05; // 5% del grupo
+const QUIZ_TIME_LIMIT = 15000; // 15 segundos fijos
+
+// Mapa de emojis a índices de respuesta
+const EMOJI_TO_INDEX = {
+  '1️⃣': 0, '1': 0,
+  '2️⃣': 1, '2': 1, 
+  '3️⃣': 2, '3': 2,
+  '4️⃣': 3, '4': 3
+};
+
+const INDEX_TO_LETTER = ['A', 'B', 'C', 'D'];
 
 // ─── POLLS DE VOTACIÓN ACTIVOS ───────────────────────────────────────────────────
 const activeQuizPolls = new Map(); // groupId -> pollData
@@ -148,36 +158,35 @@ async function startQuizDirectly(groupId, difficulty, client) {
       return;
     }
     
-    // Enviar mensaje del quiz
+    // Enviar mensaje del quiz con instrucciones de reacción
     const quizMessage = formatQuizMessage(quizData.quiz);
-    const pollOptions = createPollOptions(quizData.quiz);
+    const options = createPollOptions(quizData.quiz);
+    
+    const fullMessage = quizMessage + 
+      `\n\n🎯 *OPCIONES:*\n` +
+      options.map((opt, i) => `${['1️⃣','2️⃣','3️⃣','4️⃣'][i]} ${opt}`).join('\n') +
+      `\n\n⏱️ *Tienes 15 segundos para reaccionar con 1️⃣, 2️⃣, 3️⃣ o 4️⃣*\n` +
+      `👆 *Reaccioná al mensaje con el emoji de tu respuesta!*`;
     
     try {
-      // Enviar mensaje informativo primero
-      await client.sendMessage(groupId, quizMessage);
-
-      // Enviar poll nativo de WhatsApp
-      const poll = new Poll(quizData.quiz.question, pollOptions, { allowMultipleAnswers: false });
-      const pollMessage = await client.sendMessage(groupId, poll);
+      const msg = await client.sendMessage(groupId, fullMessage);
       
-      // Guardar el ID del mensaje del poll
-      quizData.pollMessageId = pollMessage.id._serialized;
+      // Guardar el ID del mensaje para detectar reacciones
+      quizData.quizMessageId = msg.id._serialized;
       
-      console.log(`🧠 Quiz poll creado: ${quizData.pollMessageId}`);
+      console.log(`🧠 Quiz enviado: ${quizData.quizMessageId} (15s límite)`);
       
     } catch (error) {
-      console.error("Error creando poll:", error.message);
-      // Fallback: enviar opciones como texto
-      await client.sendMessage(groupId, pollOptions.join("\n"));
+      console.error("Error enviando quiz:", error.message);
     }
     
-    // Configurar timeout para terminar el quiz automáticamente
+    // Configurar timeout para terminar el quiz automáticamente (15 segundos)
     setTimeout(async () => {
       const activeQuiz = getActiveQuiz(groupId);
       if (activeQuiz && activeQuiz.status === 'active') {
         await finishQuiz(groupId, client);
       }
-    }, quizData.timeLimit);
+    }, QUIZ_TIME_LIMIT);
     
   } catch (error) {
     console.error("Error en startQuizDirectly:", error);
@@ -200,21 +209,17 @@ async function startQuizPoll(groupId, difficulty, message, client) {
       `🧠 *SOLICITUD DE QUIZ* 🗳️\n\n` +
       `${emoji} *Dificultad:* ${difficulty === 'easy' ? 'Fácil' : difficulty === 'normal' ? 'Normal' : 'Difícil'}\n` +
       `💰 *Premio total:* ${prize.toLocaleString()} créditos\n` +
-      `⏱️ *Tiempo límite:* ${process.env.QUIZ_TIME_LIMIT || 10} segundos\n\n` +
+      `⏱️ *Tiempo límite:* 15 segundos\n\n` +
       `📊 *Votación requerida:* ${requiredVotes} votos (${Math.round(QUIZ_THRESHOLD * 100)}% del grupo)\n\n` +
-      `👇 Votá en el poll de abajo para iniciar el quiz`
+      `👇 *Reaccioná con 1️⃣ para votar SÍ* (ignorar = NO)`
     );
-
-    const votePoll = new Poll(`¿Iniciar quiz ${difficulty}?`, ["👍 Sí, iniciar quiz", "👎 No, gracias"], { allowMultipleAnswers: false });
-    const pollMessage = await client.sendMessage(groupId, votePoll);
     
-    // Guardar datos del poll
+    // Guardar datos de la votación
     const pollData = {
       groupId,
       difficulty,
-      pollMessageId: pollMessage.id._serialized,
       requiredVotes,
-      votes: new Map(), // userId -> vote
+      votes: new Set(), // userIds que votaron sí
       startTime: Date.now(),
       timeout: 60000 // 1 minuto para votar
     };
@@ -239,33 +244,29 @@ async function finishQuizPoll(groupId, client) {
   if (!pollData) return;
   
   try {
-    // Obtener resultados del poll
-    const pollMessage = await client.getMessageById(pollData.pollMessageId);
-    const poll = await pollMessage.getPoll();
-    
-    const yesVotes = poll.votes.filter(vote => vote.selectedOptions[0] === 0).length;
-    const totalVotes = poll.votes.length;
+    const yesVotes = pollData.votes.size;
+    const totalVotes = yesVotes; // Solo contamos los sí
     
     activeQuizPolls.delete(groupId);
     
     if (yesVotes >= pollData.requiredVotes) {
       // Votación aprobada - iniciar quiz
-      await client.sendMessage(groupId,
-        `🎉 *¡VOTACIÓN APROBADA!* 🎉\n\n` +
-        `📊 *Resultados:* ${yesVotes}/${totalVotes} votos\n` +
-        `✅ *Umbral alcanzado:* ${pollData.requiredVotes} votos\n\n` +
-        `🧠 *Iniciando quiz ${pollData.difficulty} ahora...*`
-      );
+      await client.sendMessage(groupId, 
+      `🎉 *¡VOTACIÓN APROBADA!* 🎉\n\n` +
+      `📊 *Resultados:* ${yesVotes}/${totalVotes} votos\n` +
+      `✅ *Umbral alcanzado:* ${pollData.requiredVotes} votos\n\n` +
+      `🧠 *Iniciando quiz ${pollData.difficulty} ahora...*`
+    );
       
       await startQuizDirectly(groupId, pollData.difficulty, client);
     } else {
       // Votación rechazada
-      await client.sendMessage(groupId,
-        `❌ *VOTACIÓN RECHAZADA* ❌\n\n` +
-        `📊 *Resultados:* ${yesVotes}/${totalVotes} votos\n` +
-        `❌ *Umbral no alcanzado:* Se necesitaban ${pollData.requiredVotes} votos\n` +
-        `💡 *Pueden solicitar otro quiz más tarde*`
-      );
+      await client.sendMessage(groupId, 
+      `❌ *VOTACIÓN RECHAZADA* ❌\n\n` +
+      `📊 *Resultados:* ${yesVotes}/${totalVotes} votos\n` +
+      `❌ *Umbral no alcanzado:* Se necesitaban ${pollData.requiredVotes} votos\n` +
+      `💡 *Pueden solicitar otro quiz más tarde*`
+    );
     }
     
   } catch (error) {
@@ -338,21 +339,21 @@ async function handleQuizHelp(message, client) {
 
 🎮 *Cómo funciona:*
 ${isAdmin ? '• Como admin, inicias quizzes directamente' : '• Los usuarios solicitan quizzes mediante votación'}
-• Se necesita ${Math.round(QUIZ_THRESHOLD * 100)}% del grupo para aprobar
-• Una vez aprobado, tienes 10 segundos para responder
-• Responde haciendo clic en una opción del poll
-• El premio se divide entre todos los que acierten
+Se necesita ${Math.round(QUIZ_THRESHOLD * 100)}% del grupo para aprobar
+Una vez aprobado, tienes *15 segundos* para responder
+Reaccioná con 1️⃣, 2️⃣, 3️⃣ o 4️⃣ al mensaje del quiz
+El premio se divide entre todos los que acierten
 
 💡 *Sistema de votación:*
-• �️ *Usuarios no-admins:* Inician votación (requiere 5% del grupo)
+• 👤 *Usuarios no-admins:* Reaccionan con 1️⃣ para votar SÍ
 • 👑 *Admins:* Inician quiz directamente (cancela votaciones activas)
 • ⏱️ *Votación dura:* 1 minuto
 • 🎯 *Umbral:* ${Math.round(QUIZ_THRESHOLD * 100)}% de los miembros
 
 ⚙️ *Configuración:*
-• Tiempo límite configurable via .env
+• Tiempo límite: 15 segundos fijos
 • Dificultad aleatoria en quizzes automáticos
-• Sistema de polls nativo de WhatsApp
+• Sistema de reacciones con emojis
 • Fuente híbrida: API externa + banco local
 
 ${isAdmin ? '👑 *Como admin, tienes control total sobre los quizzes.*' : '💪 *Participa en las votaciones para iniciar quizzes divertidos!*'}`;
@@ -463,96 +464,59 @@ async function processQuizAnswer(message, client) {
   return success;
 }
 
-// ─── MANEJO DE POLLS DE QUIZ ─────────────────────────────────────────────────────
+// ─── MANEJO DE REACCIONES DE QUIZ ───────────────────────────────────────────────
 async function handleQuizPollReaction(reaction, client) {
-  // Verificar que reaction.message existe
-  if (!reaction.message) {
-    console.log("⚠️ Poll reaction sin mensaje asociado - ignorando");
-    return;
-  }
+  if (!reaction.message) return;
   
   const from = reaction.message.from;
   const senderId = reaction.senderId;
+  const emoji = reaction.reaction;
   
-  // Buscar quiz activo en este grupo
+  // Verificar si es un quiz activo
   const quizData = getActiveQuiz(from);
-  if (!quizData || quizData.status !== 'active') return;
-  
-  // Verificar si la reacción es para el mensaje del poll
-  if (quizData.pollMessageId && reaction.message.id._serialized !== quizData.pollMessageId) {
-    return;
-  }
-  
-  // Verificar si el tiempo ha expirado
-  if (Date.now() - quizData.startTime > quizData.timeLimit) {
-    return;
-  }
-  
-  // Obtener la opción seleccionada del poll
-  try {
-    const poll = await reaction.message.getPoll();
-    if (!poll) return;
+  if (quizData && quizData.status === 'active') {
+    // Verificar si la reacción es para el mensaje del quiz
+    if (quizData.quizMessageId && reaction.message.id._serialized !== quizData.quizMessageId) {
+      return;
+    }
     
-    // Buscar la votación de este usuario
-    const userVote = poll.votes.find(vote => vote.voterId === senderId);
-    if (!userVote) return;
+    // Verificar si el tiempo ha expirado (15 segundos)
+    if (Date.now() - quizData.startTime > QUIZ_TIME_LIMIT) {
+      return;
+    }
     
-    // Convertir el índice de la opción a letra (0 -> A, 1 -> B, etc.)
-    const selectedOptionIndex = userVote.selectedOptions[0];
-    const answerLetter = String.fromCharCode(65 + selectedOptionIndex);
+    // Verificar si el emoji es una resp válida (1️⃣ 2️⃣ 3️⃣ 4️⃣)
+    const optionIndex = EMOJI_TO_INDEX[emoji];
+    if (optionIndex === undefined) return;
+    
+    // Convertir índice a letra (0 -> A, 1 -> B, etc.)
+    const answerLetter = INDEX_TO_LETTER[optionIndex];
     
     // Registrar la respuesta
     const success = submitAnswer(from, senderId, answerLetter);
     if (success) {
-      console.log(`🧠 Respuesta de quiz registrada: ${senderId} -> ${answerLetter}`);
+      console.log(`🧠 Respuesta de quiz: ${senderId} -> ${answerLetter}`);
     }
-    
-  } catch (error) {
-    console.error("Error procesando poll de quiz:", error.message);
-  }
-}
-
-// ─── MANEJO DE VOTACIÓN DE QUIZ POLL ─────────────────────────────────────────────
-async function handleQuizPollVote(reaction, client) {
-  // Verificar que reaction.message existe
-  if (!reaction.message) {
     return;
   }
   
-  const from = reaction.message.from;
-  const senderId = reaction.senderId;
-  
-  // Buscar poll de votación activo en este grupo
+  // Verificar si es una votación activa para iniciar quiz
   const pollData = activeQuizPolls.get(from);
-  if (!pollData) return;
-  
-  // Verificar si la reacción es para el mensaje del poll
-  if (pollData.pollMessageId && reaction.message.id._serialized !== pollData.pollMessageId) {
-    return;
-  }
-  
-  // Verificar si el tiempo ha expirado
-  if (Date.now() - pollData.startTime > pollData.timeout) {
-    return;
-  }
-  
-  try {
-    // Obtener la opción seleccionada del poll
-    const poll = await reaction.message.getPoll();
-    if (!poll) return;
-    
-    // Buscar la votación de este usuario
-    const userVote = poll.votes.find(vote => vote.voterId === senderId);
-    if (!userVote) return;
-    
-    // Guardar voto (solo la primera opción cuenta)
-    if (!pollData.votes.has(senderId)) {
-      pollData.votes.set(senderId, userVote.selectedOptions[0]);
-      console.log(`🗳️ Voto de quiz registrado: ${senderId} -> opción ${userVote.selectedOptions[0]}`);
+  if (pollData) {
+    // Verificar si la reacción es 1️⃣ (voto sí)
+    if (emoji === '1️⃣' || emoji === '1') {
+      // Verificar si el tiempo ha expirado
+      if (Date.now() - pollData.startTime > pollData.timeout) {
+        return;
+      }
+      
+      // Guardar voto (solo una vez por usuario)
+      if (!pollData.votes.has(senderId)) {
+        pollData.votes.add(senderId);
+        console.log(`🗳️ Voto de quiz registrado: ${senderId}`);
+      }
     }
-    
-  } catch (error) {
-    console.error("Error procesando voto de quiz poll:", error.message);
+    return;
   }
 }
 
@@ -560,7 +524,6 @@ module.exports = {
   handleQuizCommand,
   processQuizAnswer,
   handleQuizPollReaction,
-  handleQuizPollVote,
   getActiveQuiz,
   createRandomQuiz,
   finishQuiz,

@@ -242,10 +242,9 @@ function formatQuizMessage(quiz, timeLimit = null) {
   
   let message = `${emoji} *QUIZ ${quiz.difficulty.toUpperCase()}* 🎯\n\n`;
   message += `${categoryEmoji} *Categoría:* ${quiz.category}\n`;
+  message += `⏱️ *Tiempo límite:* ${actualTimeLimit} segundos\n\n`;
   message += `💰 *Premio total:* ${prize.toLocaleString()} créditos\n`;
-  message += `⏱️ *Tiempo límite:* ${actualTimeLimit} segundos\n`;
-  message += `${quiz.source === 'api' ? '🌐 *Fuente:* API Externa' : '📚 *Fuente:* Local'}\n\n`;
-  message += `📝 *Pregunta:* ${quiz.question}\n\n`;
+  message += `📝 *Pregunta:* ${quiz.question}\n`;
   
   return message;
 }

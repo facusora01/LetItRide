@@ -5,7 +5,8 @@ const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
 const cron = require("node-cron");
 const db = require("./database");
-const { handleCommand, handlePollReaction, handleBetReaction, launchGame, handleQuizCommand, handleQuizPollVote } = require("./commands");
+const { handleCommand, handlePollReaction, handleBetReaction, launchGame, handleQuizCommand, handleQuizPollReaction } = require("./commands");
+const { processQuizAnswer } = require("./quizzes-new");
 
 // ─── CONFIGURACIÓN ────────────────────────────────────────────────────────────
 const GAME_SCHEDULE = process.env.GAME_SCHEDULE || "20:00";
@@ -178,13 +179,10 @@ client.on("message_reaction", async (reaction) => {
     // 1. Procesa votaciones de inicio (/casino start)
     await handlePollReaction(reaction, client);
     
-    // 2. Procesa respuestas de polls de quizzes
+    // 2. Procesa respuestas de quizzes (reacciones 1️⃣2️⃣3️⃣4️⃣)
     await handleQuizPollReaction(reaction, client);
     
-    // 3. Procesa votaciones de inicio de quizzes
-    await handleQuizPollVote(reaction, client);
-    
-    // 4. Procesa confirmaciones de apuestas y regalos
+    // 3. Procesa confirmaciones de apuestas y regalos
     const reactorId = reaction.senderId; 
     await handleBetReaction(client, reaction, reactorId); 
   } catch (err) {
@@ -252,13 +250,6 @@ async function processMessage(message) {
 }
 
 client.on("message_create", async (msg) => {
-  // Manejar votos de poll de quiz
-  if (msg.type === 'poll_vote') {
-    const { handleQuizPollVote } = require("./quizzes");
-    await handleQuizPollVote(msg, client);
-    return;
-  }
-
   processMessage(msg).catch(err => {
     // Ignorar errores temporales de Chrome/Puppeteer
     if (err.message.includes("Target closed") || 
