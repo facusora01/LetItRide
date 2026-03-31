@@ -1,11 +1,12 @@
+const startupTime = Math.floor(Date.now() / 1000);
+
 require("dotenv").config();
 const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
 const cron = require("node-cron");
-const { exec } = require("child_process");
 const db = require("./database");
-const { handleCommand, handlePollReaction, launchGame } = require("./commands");
-const { handleQuizCommand, handleQuizPollReaction } = require("./quizzes-new");
+const { handleCommand, handlePollReaction, handleBetReaction, launchGame, handleQuizCommand, handleQuizPollReaction } = require("./commands");
+const { processQuizAnswer } = require("./quizzes-new");
 
 // ─── CONFIGURACIÓN ────────────────────────────────────────────────────────────
 const GAME_SCHEDULE = process.env.GAME_SCHEDULE || "20:00";
@@ -16,15 +17,19 @@ const CREDIT_DAY = parseInt(process.env.CREDIT_DAY) || 5;
 const DAY_NAMES = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
 const creditDayName = DAY_NAMES[CREDIT_DAY];
 
+// Quizzes: solo activación manual por /quiz start (superadmin)
+console.log("🧠 Quizzes: modo manual activado");
+
 // ─── CLIENTE WHATSAPP ─────────────────────────────────────────────────────────
 const client = new Client({
   authStrategy: new LocalAuth({
     clientId: "letitride-casino-bot",
-    dataPath: "../bot_session"
+    dataPath: "./casino_session"
   }),
   puppeteer: {
     headless: true,
     executablePath: process.env.CHROMIUM_PATH || undefined,
+    browser: process.env.BROWSER_TYPE || "chrome",
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
@@ -50,7 +55,10 @@ client.on("qr", (qr) => {
 client.on("authenticated", () => console.log("✅ Autenticado correctamente."));
 client.on("auth_failure", (msg) => console.error("❌ Error de autenticación:", msg));
 
-client.on("ready", () => {
+client.on("ready", async () => {
+  // Se eliminó la optimización de recursos (setRequestInterception) 
+  // porque generaba mucha latencia en la lectura de los mensajes.
+
   console.log("🎰 LetItRide Casino Bot listo y conectado a WhatsApp!\n");
 
   const groups = db.getActiveGroups();
@@ -58,9 +66,31 @@ client.on("ready", () => {
   groups.forEach((g) => console.log(`   • ${g.group_name} (${g.group_id})`));
   console.log(`\n📅 Schedulers iniciados\n`);
 
-  // ─── CARGA SEMANAL DE CRÉDITOS ─────────────────────────────────────────
+  // ─── LIMPIEZA AUTOMÁTICA (3 DÍAS DE INACTIVIDAD) ─────────────────────────
+  cron.schedule("0 3 * * *", async () => {
+    console.log("🧹 Iniciando chequeo de inactividad...");
+    const inactiveGroups = db.getInactiveGroups(3); 
+    
+    for (const group of inactiveGroups) {
+      try {
+        const chat = await client.getChatById(group.group_id);
+        await client.sendMessage(group.group_id, 
+          "👋 *Aviso de inactividad:*\n\n" +
+          "Este casino se retira del grupo debido a que no hubo actividad en los últimos 3 días. " +
+          "¡Vuelvan a invitarme cuando quieran jugar! 🎰"
+        );
+        await chat.leave();
+        db.removeGroup(group.group_id);
+        console.log(`🚪 Salida automática: ${group.group_name} por inactividad.`);
+      } catch (err) {
+        console.error(`❌ Error al salir del grupo ${group.group_id}:`, err.message);
+      }
+    }
+  }, { timezone: "America/Argentina/Buenos_Aires" });
+
+  // ─── RESETEO SEMANAL DE CRÉDITOS ─────────────────────────────────────────
   cron.schedule(`0 0 * * ${CREDIT_DAY}`, () => {
-    console.log(`🔄 Carga semanal de créditos (${creditDayName})`);
+    console.log(`🔄 Reseteo semanal de créditos (${creditDayName})`);
     db.getActiveGroups().forEach(group => {
       db.resetWeeklyCredits(group.group_id);
       client.sendMessage(group.group_id,
@@ -70,50 +100,6 @@ client.on("ready", () => {
       );
     });
   }, { timezone: "America/Argentina/Buenos_Aires" });
-
-  // ─── TAREA 1: AUTO-SALIR DE GRUPOS INACTIVOS (3:00 AM) ───────────────────
-  cron.schedule("0 3 * * *", async () => {
-    console.log("🧹 [3:00 AM] Iniciando limpieza de grupos inactivos...");
-    try {
-      const inactiveGroups = db.getInactiveGroups(2); 
-      
-      for (const group of inactiveGroups) {
-        try {
-          console.log(`👋 Saliendo del grupo inactivo: ${group.group_name} (${group.group_id})`);
-          const chat = await client.getChatById(group.group_id);
-          
-          if (chat) {
-            await chat.sendMessage("⚠️ *Aviso de inactividad* ⚠️\n\nComo no me han usado en 2 días, me retiro del grupo para ahorrar recursos del servidor.\n\n¡Nos vemos! 👋🎰");
-            await chat.leave();
-          }
-          db.removeGroup(group.group_id); 
-        } catch (error) {
-          console.error(`❌ Error al salir del grupo ${group.group_id}:`, error.message);
-          db.removeGroup(group.group_id);
-        }
-        await new Promise(r => setTimeout(r, 3000));
-      }
-      console.log("✅ Limpieza de grupos terminada.");
-    } catch (err) {
-      console.error("❌ Error en el cron de inactividad:", err.message);
-    }
-  }, { timezone: "America/Argentina/Buenos_Aires" });
-
-  // ─── TAREA 2: BACKUP AUTOMÁTICO A GITHUB/GITLAB (4:00 AM) ────────────────
-  cron.schedule("0 4 * * *", () => {
-    console.log("💾 [4:00 AM] Iniciando backup automático a la rama 'Backups'...");
-    const cmd = `git add . && git commit -m "Auto-backup $(date +'%Y-%m-%d %H:%M')" || echo "Sin cambios para commitear" && git push origin HEAD:Backups -f`;
-    exec(cmd, (error, stdout, stderr) => {
-      if (error && !error.message.includes('Sin cambios')) {
-        console.warn(`⚠️ Advertencia de Git: ${error.message}`);
-      }
-      if (stderr && !stderr.includes('Everything up-to-date')) {
-        console.log(`ℹ️ Info Git: ${stderr}`);
-      }
-      console.log(`✅ Backup completado: ${stdout.trim() || 'Rama actualizada.'}`);
-    });
-  }, { timezone: "America/Argentina/Buenos_Aires" });
-
 
   // ─── JUEGO AUTOMÁTICO ────────────────────────────────────────────────────
   cron.schedule("* * * * *", async () => {
@@ -142,59 +128,121 @@ client.on("ready", () => {
       }
     }
   }, { timezone: "America/Argentina/Buenos_Aires" });
+
+  // Los quizzes se activan SOLO por comando /quiz start (superadmin)
+  console.log("🧠 Quizzes: activación manual únicamente (/quiz start)");
 });
 
-// ─── LISTENER DE REACCIONES (para el poll de /casino start y quizzes) ────────
+// ─── LISTENER DE REACCIONES (para el poll de /casino start y quizzes) ──────────────────
 client.on("message_reaction", async (reaction) => {
-  const timeout = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error("Timeout procesando reacción")), 5000)
-  );
+  // 1. Filtro Anti-Backlog: Ignorar reacciones de antes de prender el bot
+  if (reaction.timestamp && reaction.timestamp < startupTime) return;
+
+  // 2. Filtro Anti-Fantasmas: Ignorar cuando un usuario quita su reacción (llega vacío)
+  if (!reaction.reaction || reaction.reaction.trim() === '') return;
+
+  console.log(`🔔 REACTION EVENT 🔥`, JSON.stringify({
+    emoji: reaction.reaction,
+    sender: reaction.senderId,
+    msgId: reaction.msgId?._serialized
+  }));
+  
   try {
-    // 👈 ACÁ AGREGAMOS handleQuizPollReaction
-    await Promise.race([
-      handlePollReaction(reaction, client),
-      handleQuizPollReaction(reaction, client), 
-      timeout
-    ]);
+    // 3. Procesa votaciones de inicio (/casino start), confirmaciones de regalos y apuestas
+    await handlePollReaction(reaction, client);
+    
+    // 4. Procesa respuestas de quizzes (reacciones 1️⃣2️⃣3️⃣4️⃣)
+    await handleQuizPollReaction(reaction, client);
+    
+    // NOTA: Borramos la llamada a handleBetReaction porque handlePollReaction 
+    // ya se encarga de todo el flujo de apuestas correctamente.
   } catch (err) {
     console.error("❌ Error en message_reaction:", err.message);
   }
 });
 
-// ─── HANDLER DE MENSAJES ──────────────────────────────────────────────────────
+
+let isSynced = false; 
+// ───── HANDLER DE MENSAJES ─────────────────────
 async function processMessage(message) {
+  // Filtro de mensajes antiguos (Backlog)
+  if (message.timestamp < startupTime) return;
+
+  if (!isSynced) {
+    isSynced = true;
+    console.log("\n" + "=".repeat(45));
+    console.log("🚀 SISTEMA SINCRONIZADO: Leyendo chat en tiempo real");
+    console.log(`📥 Primer mensaje recibido: "${message.body?.slice(0, 20)}..."`);
+    console.log("=".repeat(45) + "\n");
+  }
+
   const body = message.body?.trim() || "";
+
   if (!body.startsWith("/") || body.length > 450) return;
 
   const from = message.fromMe ? message.to : message.from;
 
   try {
+
     if (!from.endsWith("@g.us") && !from.endsWith("@lid")) return;
 
     const lowerBody = body.toLowerCase();
-    // 👈 ACÁ AGREGAMOS "/quiz" A LA LISTA
-    const validCommands = ["/casino", "/letitride", "/bet", "/balance", "/top", "/history", "/stop", "/admin", "/quiz"];
+    const validCommands = ["/casino", "/letitride", "/bet", "/balance", "/top", "/history", "/stop", "/admin", "/spin", "/quiz"];
     if (!validCommands.some(cmd => lowerBody.startsWith(cmd))) return;
+
+    db.updateGroupActivity(from); 
 
     const logBody = body.length > 100 ? body.slice(0, 100) + "..." : body;
     console.log(`\n🎰 [${new Date().toLocaleTimeString("es-AR")}] ${from}: "${logBody}"`);
 
-    // 👈 ACÁ SEPARAMOS LA LÓGICA
+    // Procesar comandos de quiz primero
     if (lowerBody.startsWith("/quiz")) {
       await handleQuizCommand(message, client);
-    } else {
-      await handleCommand(message, client);
+      return;
     }
+
+    // Procesar respuestas de quiz (A, B, C, D)
+    if (/^[ABCD]$/.test(body.trim().toUpperCase())) {
+      const isQuizAnswer = await processQuizAnswer(message, client);
+      if (isQuizAnswer) return; // Si es respuesta de quiz, no procesar como comando normal
+    }
+
+    await handleCommand(message, client);
   } catch (error) {
+    // Ignorar errores de Chrome/Puppeteer que son temporales
+    if (error.message.includes("Target closed") || 
+        error.message.includes("Protocol error") || 
+        error.message.includes("Session closed")) {
+      console.log("⚠️ Error temporal de Chrome/Puppeteer - ignorando");
+      return;
+    }
     console.error("❌ Error en processMessage:", error.message);
   }
 }
 
-client.on("message_create", processMessage);
+client.on("message_create", async (msg) => {
+  processMessage(msg).catch(err => {
+    // Ignorar errores temporales de Chrome/Puppeteer
+    if (err.message.includes("Target closed") || 
+        err.message.includes("Protocol error") || 
+        err.message.includes("Session closed")) {
+      console.log("⚠️ Error temporal en message_create - ignorando");
+      return;
+    }
+    console.error("❌ Error asíncrono en processMessage:", err.message);
+  });
+});
 
+// ─── MONITOREO DE SALUD DEL NAVEGADOR ───────────────────────────────────
 client.on("disconnected", (reason) => {
-  console.error("❌ Bot desconectado:", reason);
-  process.exit(1);
+    console.error("🚨 Bot desconectado del socket:", reason);
+
+    process.exit(1); 
+});
+
+client.pupPage?.on('error', (err) => {
+    console.error("🔥 Error crítico en la página de Puppeteer:", err.message);
+    process.exit(1); 
 });
 
 process.on('unhandledRejection', (reason) => {

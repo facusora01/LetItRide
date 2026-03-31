@@ -231,13 +231,8 @@ function updateGroupSettings(groupId, settings) {
 // ─── NORMALIZACIÓN DE IDs ──────────────────────────────────────────────────────
 // WhatsApp multi-device genera IDs tipo "549247XXXX:15@lid" además del clásico "549247XXXX@c.us".
 // Esta función convierte cualquier formato al canónico @c.us para no duplicar usuarios.
-// ─── NORMALIZACIÓN DE IDS ──────────────────────────────────────────────────────
 function normalizeUserId(rawId) {
   if (!rawId || typeof rawId !== 'string') return rawId;
-  
-  // 🚨 FIX CRÍTICO: Evitar que el ID de un grupo se convierta en usuario
-  if (rawId.includes('@g.us')) return null;
-
   const number = rawId.split('@')[0].split(':')[0];
   return number + '@c.us';
 }
@@ -245,11 +240,6 @@ function normalizeUserId(rawId) {
 // ─── USUARIOS ─────────────────────────────────────────────────────────────────
 function getOrCreateUser(userId, groupId, username = null, phoneNumber = null) {
   const normalizedId = normalizeUserId(userId);
-
-  // Si el ID es inválido (ej. era un grupo por error de WWebJS), devolvemos un usuario temporal de error
-  if (!normalizedId) {
-    return { user_id: 'invalido', credits: 0, total_won: 0, total_lost: 0, username: 'Error de ID' };
-  }
 
   // 1. Busca por ID canónico
   let user = db.prepare(`SELECT * FROM users WHERE user_id = ? AND group_id = ?`).get(normalizedId, groupId);
@@ -265,12 +255,10 @@ function getOrCreateUser(userId, groupId, username = null, phoneNumber = null) {
       INSERT INTO users (user_id, group_id, username, phone_number, credits)
       VALUES (?, ?, ?, ?, ?)
     `).run(normalizedId, groupId, username, phoneNumber, DEFAULT_WELCOME_CREDITS);
-    
     db.prepare(`
       INSERT INTO transactions (user_id, group_id, type, amount, description, balance_after)
       VALUES (?, ?, 'credit', ?, 'Créditos iniciales de bienvenida', ?)
     `).run(normalizedId, groupId, DEFAULT_WELCOME_CREDITS, DEFAULT_WELCOME_CREDITS);
-    
     user = db.prepare(`SELECT * FROM users WHERE user_id = ? AND group_id = ?`).get(normalizedId, groupId);
   } else if (username && !user.username) {
     db.prepare(`UPDATE users SET username = ? WHERE user_id = ? AND group_id = ?`).run(username, user.user_id, groupId);

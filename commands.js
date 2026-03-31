@@ -1,7 +1,16 @@
 const db = require("./database");
+const { DEFAULT_WEEKLY_CREDITS } = db;
 const { exec } = require("child_process");
-const { MessageMedia } = require("whatsapp-web.js");
+const { MessageMedia, Poll } = require("whatsapp-web.js");
 const path = require("path");
+const fs = require("fs");
+const { 
+  handleQuizCommand,
+  handleQuizPollReaction,
+  getActiveQuiz,
+  finishQuiz,
+  QUIZ_PRIZES,
+} = require("./quizzes-new");
 
 const CREDIT_DAY = parseInt(process.env.CREDIT_DAY) || 5;
 const BET_DURATION = parseInt(process.env.BET_DURATION) || 4; // minutos de apuestas
@@ -15,28 +24,13 @@ const HELP_TEXT = `
 
 *🎮 Juegos:*
 ▸ \`/casino start\` — Votación para iniciar ruleta
-▸ \`/bet <monto> <objetivo...>\` — Apostar
-
-*💡 Cómo apostar:*
-El monto se cobra por cada objetivo. Máx. 15 objetivos por \`/bet\`.
-
-*💰 Mínimos por tipo:*
-• Número (0-36): 100 créditos → paga 35:1
-• Rojo / Negro: 2.000 → paga 1:1
-• Par / Impar: 2.000 → paga 1:1
-• Altos / Bajos: 1.000 → paga 1:1
-• Docenas (d1/d2/d3): 500 → paga 2:1
-• Columnas (c1/c2/c3): 500 → paga 2:1
-
-Ejemplos:
-▸ \`/bet 500 7\` — 500 al número 7
-▸ \`/bet 2000 rojo par\` — a rojo Y par (total: 4.000)
-▸ \`/bet 1000 3 15 d1\` — a tres objetivos (total: 3.000)
 
 *💰 Cuenta:*
 ▸ \`/balance\` — Ver tus créditos
 ▸ \`/top\` — Ranking del grupo
 ▸ \`/history\` — Tus últimas transacciones
+▸ \`/casino give @usuario <monto>\` — Dar créditos a alguien (de tu saldo)
+▸ \`/casino give <monto>\` — Dar créditos a todos los del grupo (de tu saldo)
 
 *⚙️ Configuración (Solo Admins):*
 ▸ \`/LetItRide\` — Agregar el casino al grupo
@@ -47,11 +41,7 @@ Ejemplos:
 `.trim();
 
 // ─── UTILS ────────────────────────────────────────────────────────────────────
-// ID del grupo admin — copialo del log cuando mandes /admin desde ese grupo
-// Formato: "XXXXXXXXXX-XXXXXXXXXX@g.us"
-// Dejalo vacío ("") para desactivar el filtro por grupo durante la configuración inicial
 const ADMIN_GROUP_ID = process.env.ADMIN_GROUP_ID || "";
-
 const SUPER_ADMINS = ["5491100000000", "541100000000", "100000000000000"];
 
 async function isAdmin(message, client) {
@@ -109,7 +99,7 @@ function formatBetType(betType, betValue) {
   return names[betType] || betType;
 }
 
-// ─── KEYWORDS DE APUESTA (Español → tipo interno) ─────────────────────────────
+// ─── KEYWORDS DE APUESTA ──────────────────────────────────────────────────────
 const KEYWORD_MAP = {
   'rojo':  'red',
   'negro': 'black',
@@ -135,51 +125,53 @@ function parseTarget(token) {
   return null;
 }
 
-// ─── MÍNIMOS POR CATEGORÍA DE APUESTA ────────────────────────────────────────
 const BET_MINIMUMS = {
-  'number':  100,   // números 0-36
-  'even':    2000,  // par
-  'odd':     2000,  // impar
-  'red':     2000,  // rojo
-  'black':   2000,  // negro
-  'dozen1':  500,   // d1
-  'dozen2':  500,   // d2
-  'dozen3':  500,   // d3
-  'column1': 500,   // c1
-  'column2': 500,   // c2
-  'column3': 500,   // c3
-  'high':    1000,  // altos
-  'low':     1000,  // bajos
+  'number':  100,
+  'even':    2000,
+  'odd':     2000,
+  'red':     2000,
+  'black':   2000,
+  'dozen1':  500,
+  'dozen2':  500,
+  'dozen3':  500,
+  'column1': 500,
+  'column2': 500,
+  'column3': 500,
+  'high':    1000,
+  'low':     1000,
 };
 
-// Máximo de objetivos distintos por comando /bet
 const MAX_BET_TARGETS = 15;
 
 // ─── VALIDADORES DE COMANDOS ──────────────────────────────────────────────────
-// ─── SUBCOMANDOS VÁLIDOS DE /casino ─────────────────────────────────────────
-const VALID_SUBCOMMANDS = ["help", "add", "remove", "status", "start", "schedule", "days", "give"];
+// ─── VALIDADORES DE COMANDOS ──────────────────────────────────────────────────
+// Quitamos "credits" y agregamos "give"
+const VALID_SUBCOMMANDS = ["help", "add", "remove", "status", "start", "reset", "schedule", "days", "give", "creditos"];
 
 const COMMAND_RULES = {
-  "/balance": [1, 1],
-  "/top":     [1, 1],
-  "/history": [1, 1],
-  "/stop":    [1, 1],
-  "/casino":  [2, 5],  // /casino give @user 5000
+  "/balance":   [1, 1],
+  "/top":       [1, 1],
+  "/history":   [1, 1],
+  "/stop":      [1, 1],
+  "/confirmar": [1, 1],
+  "/casino":    [2, 5],
   "/letitride": [1, 1],
-  "/bet":     [3, 17], // cmd + monto + hasta MAX_BET_TARGETS=15 targets
-  "/admin":   [1, 2],
+  "/bet":       [3, 52],
+  "/admin":     [1, 4],
+  "/spin":      [1, 1],
 };
 
-// Longitud máxima del body por comando (en caracteres)
 const COMMAND_MAX_LENGTH = {
-  "/balance": 8,
-  "/top":     4,
-  "/history": 8,
-  "/stop":    5,
-  "/casino":  50,  // /casino give @user 20000 needs more room
+  "/balance":   8,
+  "/top":       4,
+  "/history":   8,
+  "/stop":      5,
+  "/confirmar": 9,
+  "/casino":    100,
   "/letitride": 11,
-  "/bet":     100, // "/bet 50000 rojo negro par impar altos bajos d1 d2 d3 c1 c2 c3 7 15" ≈ 15 targets
-  "/admin":   20,
+  "/bet":       350,
+  "/admin":     150,
+  "/spin":      5,
 };
 
 function validateCommand(parts) {
@@ -188,37 +180,21 @@ function validateCommand(parts) {
   if (!rule) return true;
 
   const fullBody = parts.join(" ");
-
-  // ── FAIL-FAST: longitud primero ───────────────────────────────────────────
-  // Si el cuerpo supera el límite, abortamos ANTES de cualquier regex o loop.
-  // Esto evita que strings enormes pasen por todos los checks.
   const maxLen = COMMAND_MAX_LENGTH[cmd];
   if (maxLen && fullBody.length > maxLen) return false;
 
-  // ── FAIL-FAST: cantidad de partes ─────────────────────────────────────────
-  // Si tiene demasiados o muy pocos tokens, no tiene sentido seguir validando.
   const [min, max] = rule;
   if (parts.length < min || parts.length > max) return false;
 
-  // A partir de acá el mensaje tiene tamaño y forma válidos.
-  // Ahora buscamos contenido malicioso.
-
-  // 1. Rechazar null bytes y caracteres de control
   for (let i = 0; i < fullBody.length; i++) {
     const code = fullBody.charCodeAt(i);
     if (code === 0 || (code >= 1 && code <= 8) || (code >= 11 && code <= 31) || code === 127) return false;
   }
 
-  // 2. Rechazar caracteres Unicode peligrosos (RTL override, zero-width, BOM)
-  if (/[​-‏‪-‮⁠-⁤﻿]/.test(fullBody)) return false;
-
-  // 3. Rechazar emoji flood — bytes UTF-8 > 1.5× largo en chars
+  if (/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/.test(fullBody)) return false;
   if (Buffer.byteLength(fullBody, "utf8") > fullBody.length * 1.5) return false;
-
-  // 4. Rechazar HTML/JS injection
   if (/<|>|javascript\s*:|on[a-z]+\s*=/i.test(fullBody)) return false;
 
-  // 5. Rechazar shell injection y path traversal (solo /casino y /bet)
   if (cmd === "/casino" || cmd === "/bet") {
     const args = fullBody.slice(cmd.length);
     if (/[`$;|&{}()[\]'"\\]/.test(args)) return false;
@@ -226,7 +202,6 @@ function validateCommand(parts) {
     if (/--|(?:UNION|SELECT|DROP|INSERT|UPDATE|DELETE|ALTER|FROM|WHERE)\s/i.test(args)) return false;
   }
 
-  // 6. Rechazar números de más de 15 dígitos en /bet
   if (cmd === "/bet") {
     if (parts.some(p => /^\d{16,}$/.test(p))) return false;
   }
@@ -234,24 +209,167 @@ function validateCommand(parts) {
   return true;
 }
 
-// ─── POLL DE VOTACIÓN ─────────────────────────────────────────────────────────
+// ─── CONTROL DE MEMORIA DE VOTACIONES Y CONFIRMACIONES ────────────────────────
 const pendingPolls = new Map();
+const pendingConfirmations = new Map();
+const pendingBetReactions = new Map();
+let pendingAdminGive = null;
+
+const THUMB_UP_VARIATIONS = [
+  '👍', '👍🏻', '👍🏼', '👍🏽', '👍🏾', '👍🏿'
+];
+
+function setPendingConfirmation(msgId, userId, groupId, type, data, durationMs = 2 * 60 * 1000) {
+  const existing = pendingConfirmations.get(msgId);
+  if (existing) clearTimeout(existing.timeoutId);
+  const timeoutId = setTimeout(() => pendingConfirmations.delete(msgId), durationMs);
+  pendingConfirmations.set(msgId, { userId, groupId, type, data, timeoutId });
+}
+
+async function executeConfirmedBet(betInfo, client) {
+  const { userId, groupId, amount, targets, activeGameId } = betInfo;
+  const currentGame = db.getActiveGame(groupId);
+
+  if (!currentGame || currentGame.id !== activeGameId) {
+    await client.sendMessage(groupId, "🚫 El juego terminó o cambió mientras esperabas. Tu confirmación ya no es válida.");
+    return;
+  }
+
+  const freshUser = db.getOrCreateUser(userId, groupId);
+  const totalCost = amount * targets.length;
+  if (freshUser.credits < totalCost) {
+    await client.sendMessage(groupId,
+      `❌ Ya no tenés suficientes créditos.\n` +
+      `💸 Costo: ${formatCredits(totalCost)}\n` +
+      `💳 Tu saldo: ${formatCredits(freshUser.credits)}`
+    );
+    return;
+  }
+
+  const newBalance = db.updateUserCredits(userId, groupId, -totalCost, 'bet',
+    `Apuesta (${targets.length} objetivo${targets.length > 1 ? 's' : ''})`);
+
+  for (const t of targets) {
+    db.placeBet(currentGame.id, userId, t.betType, t.betValue, amount);
+  }
+
+  let msg = `✅ *Apuesta confirmada* 🎲\n\n`;
+  msg += `💰 ${formatCredits(amount)} × ${targets.length} = ${formatCredits(totalCost)}\n\n`;
+  msg += `*Tus apuestas:*\n`;
+  targets.forEach(t => { msg += `  • ${formatBetType(t.betType, t.betValue)}\n`; });
+  msg += `\n💳 Saldo restante: ${formatCredits(newBalance)}\n🎰 ¡Buena suerte!`;
+
+  await client.sendMessage(groupId, msg);
+}
+
+async function executeConfirmedGive(pending, client) {
+  const { userId, groupId, type, data } = pending;
+  
+  if (type === 'give_user') {
+    const { giveAmount, realId, targetName } = data;
+    const freshSender = db.getOrCreateUser(userId, groupId);
+    
+    if (freshSender.credits < giveAmount) {
+      await client.sendMessage(groupId,
+        `❌ Ya no tenés suficientes créditos.\n` +
+        `💸 Querías dar: ${formatCredits(giveAmount)}\n` +
+        `💳 Tu saldo: ${formatCredits(freshSender.credits)}`
+      );
+      return;
+    }
+
+    const senderName = freshSender.username || userId.split('@')[0];
+    const newSenderBalance = db.updateUserCredits(userId, groupId, -giveAmount, 'give', `Regalo a ${targetName}`);
+    db.updateUserCredits(realId, groupId, giveAmount, 'gift', `Regalo de ${senderName}`);
+
+    await client.sendMessage(groupId,
+      `✅ *Transferencia realizada* 🎁\n\n` +
+      `💸 Le regalaste ${formatCredits(giveAmount)} a *${targetName}*.\n` +
+      `💳 Tu nuevo saldo: ${formatCredits(newSenderBalance)}`
+    );
+  } else if (type === 'give_all') {
+    const { giveAmount, targets, totalCost } = data;
+    const freshSender = db.getOrCreateUser(userId, groupId);
+    
+    if (freshSender.credits < totalCost) {
+      await client.sendMessage(groupId,
+        `❌ Ya no tenés suficientes créditos.\n` +
+        `💸 Necesitás: ${formatCredits(totalCost)}\n` +
+        `💳 Tu saldo: ${formatCredits(freshSender.credits)}`
+      );
+      return;
+    }
+
+    const senderName = freshSender.username || userId.split('@')[0];
+    const newSenderBalance = db.updateUserCredits(userId, groupId, -totalCost, 'give', `Regalo grupal (${targets.length} jugadores)`);
+    
+    for (const target of targets) {
+      db.updateUserCredits(target.user_id, groupId, giveAmount, 'gift', `Regalo de ${senderName}`);
+    }
+
+    await client.sendMessage(groupId,
+      `✅ *Regalo grupal enviado* 🎁\n\n` +
+      `🎁 Diste ${formatCredits(giveAmount)} a *${targets.length} jugadores*.\n` +
+      `💰 Total regalado: ${formatCredits(totalCost)}\n` +
+      `💳 Tu nuevo saldo: ${formatCredits(newSenderBalance)}`
+    );
+  }
+}
 
 async function handlePollReaction(reaction, client) {
   try {
-    // Si no hay polls activos, salir inmediatamente sin procesar nada
-    if (pendingPolls.size === 0) return;
+    // Extractor Universal
+    const rawId = reaction.msgId?._serialized || reaction.msgId?.id || reaction.msgId || "";
+    const strId = typeof rawId === 'object' ? JSON.stringify(rawId) : String(rawId);
+    
+    const parts = strId.split(/[_"]/);
+    const baseId = parts.find(p => p.length > 15 && /^[A-F0-9]+$/i.test(p)) || strId;
 
-    const msgId = reaction.msgId?._serialized
-      || reaction.msgId?.id
-      || reaction._data?.msgId?._serialized;
-    if (!msgId) return;
+    // ── 1. Confirmación de apuestas ajustadas por reacción ──
+    let betMatch = null;
+    let betKey = null;
+    for (const [key, betInfo] of pendingBetReactions.entries()) {
+      const bParts = key.split('_');
+      const bId = bParts.find(p => p.length > 15 && /^[A-F0-9]+$/i.test(p)) || key;
+      if (bId === baseId) { betMatch = betInfo; betKey = key; break; }
+    }
+    if (betMatch) {
+      if (reaction.senderId === betMatch.userId && THUMB_UP_VARIATIONS.includes(reaction.reaction)) {
+        clearTimeout(betMatch.timeoutId);
+        pendingBetReactions.delete(betKey);
+        await executeConfirmedBet(betMatch, client);
+      }
+      return; 
+    }
 
+    // ── 2. Confirmación de transferencias / regalos ──
+    let confMatch = null;
+    let confKey = null;
+    for (const [key, pending] of pendingConfirmations.entries()) {
+      const cParts = key.split('_');
+      const cId = cParts.find(p => p.length > 15 && /^[A-F0-9]+$/i.test(p)) || key;
+      if (cId === baseId) { confMatch = pending; confKey = key; break; }
+    }
+    if (confMatch) {
+      if (reaction.senderId === confMatch.userId && THUMB_UP_VARIATIONS.includes(reaction.reaction)) {
+        clearTimeout(confMatch.timeoutId);
+        pendingConfirmations.delete(confKey);
+        await executeConfirmedGive(confMatch, client);
+      }
+      return; 
+    }
+
+    // ── 3. Votación de inicio de partida (/casino start) ──
     for (const [groupId, poll] of pendingPolls.entries()) {
-      if (poll.msgId !== msgId) continue;
+      const pParts = poll.msgId.split('_');
+      const pollBaseId = pParts.find(p => p.length > 15 && /^[A-F0-9]+$/i.test(p)) || poll.msgId;
+      
+      if (pollBaseId !== baseId) continue;
+      
       const voterId = reaction.senderId;
       if (!voterId) break;
-      if (reaction.reaction === '👍') {
+      
+      if (THUMB_UP_VARIATIONS.includes(reaction.reaction)) {
         if (reaction.read === false) {
           poll.yesVoters.add(voterId);
           console.log(`🗳️ Voto SÍ en ${groupId}: ${poll.yesVoters.size}/${poll.needed}`);
@@ -261,18 +379,16 @@ async function handlePollReaction(reaction, client) {
         }
       }
 
-      // ¿Se alcanzó el umbral? → lanzar inmediatamente sin esperar el timeout
       if (poll.yesVoters.size >= poll.needed) {
         clearTimeout(poll.timeoutId);
         pendingPolls.delete(groupId);
         console.log(`✅ Umbral alcanzado en ${groupId} — lanzando juego`);
         await client.sendMessage(groupId,
-          `✅ *¡Votación aprobada!* ${poll.yesVoters.size}/${poll.needed} votos 🎉\n¡La partida arranca ya!`
+          `✅ *¡Votación aprobada!* ${poll.yesVoters.size}/${poll.needed} votos 🎉\n¡La partida arranca ya!` 
         );
         const grp = db.getGroup(groupId);
         await launchGame(client, groupId, grp?.group_name || '');
       }
-
       break;
     }
   } catch (err) {
@@ -305,19 +421,15 @@ async function launchGame(client, groupId, groupName) {
       `¡Buena suerte!`
     );
 
-    // Aviso 30 segundos antes del cierre
     setTimeout(async () => {
       const stillActive = db.getActiveGame(groupId);
       if (stillActive && stillActive.id === game.id) {
         await client.sendMessage(groupId,
-          `⏰ *¡30 segundos para cerrar apuestas!* ⚠️
-
-Última chance para apostar antes de que gire la ruleta.`
+          `⏰ *¡30 segundos para cerrar apuestas!* ⚠️\n\nÚltima chance para apostar antes de que gire la ruleta.`
         );
       }
-    }, (BET_DURATION * 60 - 30) * 1000); // 30s antes del cierre
+    }, (BET_DURATION * 60 - 30) * 1000);
 
-    // Girar al cumplirse los 2 minutos
     setTimeout(async () => {
       const stillActive = db.getActiveGame(groupId);
       if (stillActive && stillActive.id === game.id) {
@@ -331,31 +443,34 @@ async function launchGame(client, groupId, groupName) {
   }
 }
 
-// ─── SPIN + RESULTADOS ────────────────────────────────────────────────────────
+// ─── SPIN + RESULTADOS (ORDENADO POR GANANCIA) ───────────────────────────────
 async function spinAndReport(client, groupId, gameId) {
   try {
     const activeGame = db.getClosingGame(groupId);
     if (!activeGame || activeGame.id !== gameId) return;
 
+    await new Promise(r => setTimeout(r, 2000));
 
-    await new Promise(r => setTimeout(r, 5000));
-    // 1. Enviar sticker de ruleta girando
-    try {
-      const stickerPath = path.join(__dirname, "Stickers", "LetItRide!!.20");
-      const stickerData = require("fs").readFileSync(stickerPath).toString("base64");
-      const media = new MessageMedia("image/webp", stickerData);
-      await client.sendMessage(groupId, media, { sendMediaAsSticker: true });
-    } catch (stickerErr) {
-      console.warn("⚠️ No se pudo enviar el sticker:", stickerErr.message);
+  try {
+    const stickerPath = path.join(__dirname, "Stickers", "LetItRide!!.20");
+    if (fs.existsSync(stickerPath)) {
+      const data = fs.readFileSync(stickerPath).toString('base64');
+      const media = new MessageMedia('image/webp', data, 'LetItRide.webp');
+      await client.sendMessage(groupId, media, {
+        sendMediaAsSticker: true,
+        stickerName: 'LetItRide',
+        stickerAuthor: 'Casino'
+      });
+    } else {
+      console.warn(`⚠️ Sticker no encontrado: ${stickerPath}`);
+      await client.sendMessage(groupId, "🎰 *¡La ruleta está girando!* 🌀");
     }
+  } catch (stickerErr) {
+    console.warn("⚠️ Error sticker:", stickerErr.message);
+    await client.sendMessage(groupId, "🎰 *¡La ruleta está girando!* 🌀");
+  }
 
-    await new Promise(r => setTimeout(r, 3000));
-
-    // 2. Mensaje de transición
-    await client.sendMessage(groupId, "🎰 *La ruleta está girando...* 🌀");
-
-    // Pequeña pausa dramática
-    await new Promise(r => setTimeout(r, 10000));
+    await new Promise(r => setTimeout(r, 8000));
 
     const result = db.spinRoulette();
     db.completeGame(activeGame.id, result.number, result.color);
@@ -364,36 +479,54 @@ async function spinAndReport(client, groupId, gameId) {
     let totalPayout = 0;
     const winners = [];
 
+    // 1. Procesamos todas las apuestas
     for (const bet of bets) {
       const multiplier = db.calculateBetPayout(bet.bet_type, bet.bet_value, result.number, result.color);
       const winAmount = multiplier * bet.amount;
-      const netResult = winAmount - bet.amount; // neto: lo que ganó/perdió realmente
+      const netResult = winAmount - bet.amount;
 
       if (winAmount > 0) {
-        // Acreditar la ganancia bruta al saldo
         db.updateUserCredits(bet.user_id, groupId, winAmount, 'win',
           `Ganancia - ${formatBetType(bet.bet_type, bet.bet_value)}`);
-        winners.push({ username: bet.username, amount: netResult, bet: formatBetType(bet.bet_type, bet.bet_value) });
+        
+        winners.push({ 
+          username: bet.username, 
+          amount: netResult, 
+          bet: formatBetType(bet.bet_type, bet.bet_value) 
+        });
         totalPayout += winAmount;
       }
-      // Registrar el resultado neto en los stats
       db.updateBetStats(bet.user_id, groupId, netResult);
       db.updateBetStatus(bet.id, winAmount, winAmount > 0 ? 'won' : 'lost');
     }
 
+    // 🚀 2. ORDENAR GANADORES: De mayor a menor ganancia
+    // Usamos el método sort con una función de comparación descendente
+    winners.sort((a, b) => b.amount - a.amount);
+
+    // 3. Construcción del mensaje con el ranking
     const colorEmoji = result.color === 'red' ? '🔴' : result.color === 'black' ? '⚫' : '🟢';
     const colorName = result.color === 'red' ? 'Rojo' : result.color === 'black' ? 'Negro' : 'Verde';
+    
     let msg = `🎰 *RESULTADO DE LA RULETA* 🎰\n\n`;
     msg += `${colorEmoji} *Número: ${result.number} — ${colorName}*\n\n`;
+
     if (winners.length > 0) {
-      msg += `🏆 *GANADORES*\n`;
-      winners.forEach(w => { msg += `👤 ${w.username}: +${w.amount.toLocaleString('es-AR')} créditos (${w.bet})\n`; });
+      msg += `🏆 *TOP GANADORES DE LA RONDA*\n`;
+      winners.forEach((w, index) => { 
+        // Agregamos un número de posición para que parezca un podio
+        const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '👤';
+        msg += `${medal} ${w.username}: +${w.amount.toLocaleString('es-AR')} créditos (${w.bet})\n`; 
+      });
       msg += `\n💰 Total pagado: ${formatCredits(totalPayout)}`;
     } else {
       msg += `😅 *Sin ganadores esta ronda*\n💰 El casino conserva todo`;
     }
+
     msg += `\n📊 ${bets.length} apuesta${bets.length !== 1 ? 's' : ''} registrada${bets.length !== 1 ? 's' : ''}`;
+    
     await client.sendMessage(groupId, msg);
+
   } catch (err) {
     console.error(`❌ Error en spinAndReport:`, err.message);
   }
@@ -411,16 +544,17 @@ async function handleCommand(message, client) {
     const command = parts[0]?.toLowerCase();
     const subcommand = (parts[1] || "").toLowerCase();
 
+    if (group && group.active) {
+        db.updateGroupActivity(groupId);
+    }
+
     if (!validateCommand(parts))
       return message.reply('❌ Comando mal escrito. Usá `/casino help` para ver el uso correcto.');
 
-    // ─── BLOQUEO EN GRUPO ADMIN ───────────────────────────────────────────────
-    // En el grupo de gestión solo funciona /admin — todo lo demás se ignora
     if (command !== "/admin" && ADMIN_GROUP_ID && groupId === ADMIN_GROUP_ID) {
-      return; // Silencio total
+      return; 
     }
 
-    // /stop
     if (command === "/stop") {
       const number = userId.split('@')[0].split(':')[0];
       if (!SUPER_ADMINS.includes(number))
@@ -433,7 +567,21 @@ async function handleCommand(message, client) {
       return;
     }
 
-    // /balance
+    // ─── COMANDO: /spin (SOLO SUPERADMIN) ─────────────────────────────────────
+    if (command === "/spin") {
+      const number = userId.split('@')[0].split(':')[0];
+      if (!SUPER_ADMINS.includes(number)) return;
+
+      const activeGame = db.getActiveGame(groupId);
+      if (!activeGame) return message.reply("🎰 No hay ninguna partida activa para girar.");
+
+      console.log(`🕹️ Admin forzando giro...`);
+
+      // Llamada directa a la función reutilizable
+      await spinAndReport(client, groupId, activeGame.id); 
+      return;
+    }
+
     if (command === "/balance") {
       if (!group || !group.active)
         return message.reply("❌ El casino no está activo. Un admin debe usar `/LetItRide`.");
@@ -449,7 +597,6 @@ async function handleCommand(message, client) {
       );
     }
 
-    // /top
     if (command === "/top") {
       if (!group || !group.active)
         return message.reply("❌ El casino no está activo en este grupo.");
@@ -464,7 +611,6 @@ async function handleCommand(message, client) {
       return message.reply(ranking);
     }
 
-    // /history
     if (command === "/history") {
       if (!group || !group.active)
         return message.reply("❌ El casino no está activo en este grupo.");
@@ -480,12 +626,11 @@ async function handleCommand(message, client) {
       return message.reply(hist);
     }
 
-    // /LetItRide — agregar casino al grupo (alias de /casino add)
     if (command === "/letitride") {
       if (group && group.active)
         return message.reply('ℹ️ El casino ya está activo en este grupo. Usá `/casino help` para ver los comandos.');
-      const admin = await isAdmin(message, client);
-      if (!admin) return message.reply("🔒 Solo los administradores pueden agregar el casino.");
+      const admin = await isAdmin(message, client);3
+      if (!admin) return message.reply("🔒 Solo los administradores pueden agregarme.");
       const chat = await message.getChat();
       db.addGroup(groupId, chat.name);
       const welcomeMsg =
@@ -499,7 +644,6 @@ async function handleCommand(message, client) {
       return;
     }
 
-    // /casino
     if (command === "/casino") {
       if (!subcommand)
         return message.reply('❓ Usá `/casino help` para ver los comandos disponibles.');
@@ -520,7 +664,7 @@ async function handleCommand(message, client) {
         if (group && group.active)
           return message.reply("ℹ️ El casino ya está activo en este grupo.");
         const admin = await isAdmin(message, client);
-        if (!admin) return message.reply("🔒 Solo los administradores pueden agregar el casino.");
+        if (!admin) return message.reply("🔒 Solo los administradores pueden agregarme.");
         const chat = await message.getChat();
         db.addGroup(groupId, chat.name);
         const welcomeMsg =
@@ -538,7 +682,7 @@ async function handleCommand(message, client) {
         if (parts.length !== 2)
           return message.reply("❌ Uso: `/casino remove`  (sin argumentos extra)");
         const admin = await isAdmin(message, client);
-        if (!admin) return message.reply("🔒 Solo los administradores pueden quitar el casino.");
+        if (!admin) return message.reply("🔒 Solo los administradores pueden quitarme.");
         db.removeGroup(groupId);
         return message.reply(`🏠 El casino cerró sus puertas. ¡Vuelvan pronto! 🎰`);
       }
@@ -553,7 +697,7 @@ async function handleCommand(message, client) {
         let s = `📊 *Estado del Casino — ${group.group_name}*\n\n`;
         s += `🎰 Juego: ${activeGame ? `🟢 En curso (#${activeGame.id})` : hasPoll ? '🗳️ Votación en curso' : '🔴 Inactivo'}\n`;
         s += `👥 Jugadores registrados: ${totalUsers}\n`;
-        s += `💰 Créditos semanales: ${formatCredits(settings?.weekly_credits || 20000)}\n`;
+        s += `💰 Créditos semanales: ${formatCredits(settings?.weekly_credits || DEFAULT_WEEKLY_CREDITS)}\n`;
         s += `🕐 Horario automático: ${settings?.game_schedule || '20:00'}\n`;
         s += `📅 Días automáticos: ${settings?.game_days || '1,3,5'}\n`;
         s += `💳 Moneda: ${settings?.currency || 'Créditos'}`;
@@ -590,7 +734,6 @@ async function handleCommand(message, client) {
         if (db.getActiveGame(groupId))
           return message.reply('🎰 Ya hay un juego activo. Esperá a que termine antes de iniciar otra.');
 
-        // ── SuperAdmin: arrancar sin votación (cancela poll si hay uno) ──────
         const senderNumber = userId.split('@')[0].split(':')[0];
         if (SUPER_ADMINS.includes(senderNumber)) {
           if (pendingPolls.has(groupId)) {
@@ -646,51 +789,133 @@ async function handleCommand(message, client) {
         return;
       }
 
-      // /casino give @mention monto — solo SuperAdmin
       if (subcommand === "give") {
         const senderNum = userId.split('@')[0].split(':')[0];
-        if (!SUPER_ADMINS.includes(senderNum))
-          return message.reply("⛔ Solo el SuperAdmin puede dar créditos.");
-
-        // El monto es el último token que sea número
-        const giveAmount = parseInt(parts[parts.length - 1]);
-        if (!giveAmount || isNaN(giveAmount) || giveAmount < 1)
-          return message.reply('❌ Uso: `/casino give @usuario <monto>`\nEj: `/casino give @Sora 5000`');
-
-        // Buscar la mención — whatsapp-web.js expone message.mentionedIds
+        const isSuperAdmin = SUPER_ADMINS.includes(senderNum);
         const mentioned = message.mentionedIds;
-        if (!mentioned || mentioned.length === 0)
-          return message.reply("❌ Mencioná al usuario con @. Ej: `/casino give @Sora 5000`");
+        const giveAmount = parseInt(parts[parts.length - 1]);
+
+        if (!giveAmount || isNaN(giveAmount) || giveAmount < 1)
+          return message.reply(
+            `❌ Uso:\n` +
+            `▸ \`/casino give @usuario 5000\` — Regalarle créditos a alguien\n` +
+            `▸ \`/casino give 1000\` — Regalar créditos a todos los jugadores`
+          );
+
+        const hasTarget = mentioned && mentioned.length > 0;
+
+        if (!hasTarget) {
+          const allUsers = db.getGroupUsers(groupId);
+          const targets = allUsers.filter(u => u.user_id !== userId);
+
+          if (targets.length === 0)
+            return message.reply('❌ No hay otros jugadores registrados en el grupo.');
+
+          const totalCost = giveAmount * targets.length;
+
+          if (isSuperAdmin) {
+            for (const t of targets)
+              db.updateUserCredits(t.user_id, groupId, giveAmount, 'credit', 'Regalo grupal de SuperAdmin');
+            return message.reply(
+              `✅ *Regalo grupal enviado* 🎁\n\n` +
+              `💰 ${formatCredits(giveAmount)} × ${targets.length} jugadores\n` +
+              `🎁 Total repartido: ${formatCredits(totalCost)}`
+            );
+          }
+
+          const sender = db.getOrCreateUser(userId, groupId, getUserDisplayName(message));
+          if (sender.credits < totalCost)
+            return message.reply(
+              `❌ No tenés suficientes créditos para el regalo grupal.\n\n` +
+              `🎁 ${formatCredits(giveAmount)} × ${targets.length} jugadores = ${formatCredits(totalCost)}\n` +
+              `💳 Tu saldo: ${formatCredits(sender.credits)}`
+            );
+
+          const replyMsg = await message.reply(
+            `💸 *Confirmar regalo grupal*\n\n` +
+            `Vas a dar ${formatCredits(giveAmount)} a cada uno de los *${targets.length} jugadores* del grupo.\n` +
+            `💰 Costo total: ${formatCredits(totalCost)}\n` +
+            `💳 Tu saldo: ${formatCredits(sender.credits)} → *${formatCredits(sender.credits - totalCost)}*\n\n` +
+            `Reaccioná a este mensaje con 👍 para confirmar _(expira en 2 min)_.`
+          );
+          
+          setPendingConfirmation(replyMsg.id._serialized, userId, groupId, 'give_all', {
+            giveAmount,
+            targets: targets.map(u => ({ user_id: u.user_id, username: u.username })),
+            totalCost,
+          });
+          
+          return replyMsg;
+        }
 
         const rawId = mentioned[0];
-
-        // Buscar al usuario por número, sin importar si está guardado como @lid o @c.us
         const existingUser = db.findUserByPhone(rawId, groupId);
         if (!existingUser)
           return message.reply("❌ Ese usuario nunca interactuó con el bot en este grupo. Pedile que mande `/balance` primero.");
 
+        if (existingUser.user_id === userId)
+          return message.reply("❌ No podés regalarte créditos a vos mismo. 😏");
+
         const realId = existingUser.user_id;
-        const newBalance = db.updateUserCredits(realId, groupId, giveAmount, 'credit', 'Regalo de SuperAdmin');
         const targetName = existingUser.username || realId.split('@')[0].split(':')[0];
 
-        return message.reply(
-          `💰 *Créditos otorgados*\n\n` +
-          `👤 ${targetName}\n` +
-          `➕ ${formatCredits(giveAmount)}\n` +
-          `💳 Nuevo saldo: ${formatCredits(newBalance)}`
+        if (isSuperAdmin) {
+          const newBalance = db.updateUserCredits(realId, groupId, giveAmount, 'credit', 'Regalo de SuperAdmin');
+          return message.reply(
+            `💰 *Créditos otorgados*\n\n` +
+            `👤 ${targetName}\n` +
+            `➕ ${formatCredits(giveAmount)}\n` +
+            `💳 Nuevo saldo: ${formatCredits(newBalance)}`
+          );
+        }
+
+        const sender = db.getOrCreateUser(userId, groupId, getUserDisplayName(message));
+        if (sender.credits < giveAmount)
+          return message.reply(
+            `❌ No tenés suficientes créditos.\n\n` +
+            `💸 Querés dar: ${formatCredits(giveAmount)}\n` +
+            `💳 Tu saldo: ${formatCredits(sender.credits)}`
+          );
+
+        const replyMsg = await message.reply(
+          `💸 *Confirmar transferencia*\n\n` +
+          `Vas a regalar ${formatCredits(giveAmount)} a *${targetName}*.\n` +
+          `💳 Tu saldo: ${formatCredits(sender.credits)} → *${formatCredits(sender.credits - giveAmount)}*\n\n` +
+          `Reaccioná a este mensaje con 👍 para confirmar _(expira en 2 min)_.`
         );
+        
+        setPendingConfirmation(replyMsg.id._serialized, userId, groupId, 'give_user', { giveAmount, realId, targetName });
+        
+        return replyMsg;
       }
+
+      if (subcommand === "creditos") {
+      const senderNum = userId.split('@')[0].split(':')[0];
+      if (!SUPER_ADMINS.includes(senderNum))
+        return message.reply("⛔ Solo SuperAdmins pueden modificar los créditos semanales.");
+
+      const nuevoMonto = parseInt(parts[2]);
+      if (!nuevoMonto || isNaN(nuevoMonto) || nuevoMonto < 1)
+        return message.reply("❌ Uso: `/casino creditos <monto>`\nEj: `/casino creditos 100000`");
+
+      const settings = db.getGroupSettings(groupId);
+      db.updateGroupSettings(groupId, { ...settings, weekly_credits: nuevoMonto });
+
+      return message.reply(
+        `✅ *Créditos semanales actualizados*\n\n` +
+        `💰 Nuevo monto: ${formatCredits(nuevoMonto)}\n` +
+        `_(Se aplicará en la próxima recarga del ${creditDayName})_`
+      );
+    }
 
       return message.reply('❓ Subcomando desconocido. Usá `/casino help`.');
     }
 
-    // /bet
     if (command === "/bet") {
       if (!group || !group.active)
         return message.reply("❌ El casino no está activo en este grupo.");
       const activeGame = db.getActiveGame(groupId);
       if (!activeGame) {
-        // Verificar si hay un juego cerrando apuestas
         const closingGame = db.getClosingGame(groupId);
         if (closingGame)
           return message.reply("🚫 Las apuestas ya cerraron para esta ronda. ¡Esperá la próxima!");
@@ -708,74 +933,239 @@ async function handleCommand(message, client) {
       if (targetTokens.length === 0)
         return message.reply('❌ Falta el objetivo de la apuesta.\nEj: `/bet 500 rojo`  o  `/bet 200 7 15 d2`');
 
-      // Validar targets
       const parsedTargets = [];
       for (const token of targetTokens) {
         const parsed = parseTarget(token);
-        if (!parsed) {
+        if (!parsed)
           return message.reply(
             `❌ Objetivo inválido: *${token}*\n\n` +
             `Usá números del 0 al 36, o palabras clave:\n` +
             `rojo, negro, par, impar, altos, bajos, d1/d2/d3, c1/c2/c3`
           );
-        }
         parsedTargets.push(parsed);
       }
 
-      const totalCost = amount * parsedTargets.length;
       const user = db.getOrCreateUser(userId, groupId, getUserDisplayName(message));
-      const settings = db.getGroupSettings(groupId);
 
-      // ── Mínimos por categoría ──────────────────────────────────────────────
-      const invalidMins = [];
+      const validTargets = [];
+      const removedByMin = [];
       for (const t of parsedTargets) {
         const catMin = BET_MINIMUMS[t.betType] || 100;
-        if (amount < catMin)
-          invalidMins.push(`• ${formatBetType(t.betType, t.betValue)}: mínimo ${formatCredits(catMin)}`);
+        if (amount < catMin) removedByMin.push({ ...t, catMin });
+        else validTargets.push(t);
       }
-      if (invalidMins.length > 0)
+
+      if (validTargets.length === 0) {
+        let msg = `❌ Ningún objetivo cumple el mínimo para ${formatCredits(amount)}:\n\n`;
+        removedByMin.forEach(t => {
+          msg += `• ${formatBetType(t.betType, t.betValue)}: mínimo ${formatCredits(t.catMin)}\n`;
+        });
+        return message.reply(msg);
+      }
+
+      const removedByFunds = [];
+      let workingTargets = [...validTargets];
+      while (workingTargets.length > 0 && user.credits < amount * workingTargets.length) {
+        removedByFunds.unshift(workingTargets.pop());
+      }
+
+      if (workingTargets.length === 0)
         return message.reply(
-          `❌ Monto insuficiente para algunos objetivos:\n\n${invalidMins.join("\n")}\n\nTu monto: ${formatCredits(amount)}`
+          `❌ No te alcanza para apostar ${formatCredits(amount)} en ningún objetivo.\n` +
+          `💳 Tu saldo: ${formatCredits(user.credits)}\n` +
+          `💰 Mínimo necesario: ${formatCredits(amount)}`
         );
 
-      if (user.credits < totalCost)
-        return message.reply(
-          `❌ Créditos insuficientes.\n` +
-          `💸 Esta apuesta cuesta: ${formatCredits(totalCost)}\n` +
-          `💳 Tu saldo: ${formatCredits(user.credits)}`
-        );
+      const totalCost = amount * workingTargets.length;
+      const wasAdjusted = removedByMin.length > 0 || removedByFunds.length > 0;
 
-      // Cobrar y registrar directamente
+      // ─── CASO A: APUESTA AJUSTADA (Requiere confirmación manual) ───
+      if (wasAdjusted) {
+        let msg = `⚠️ *Tu apuesta fue ajustada* ✂️\n\n`;
+
+        if (removedByMin.length > 0) {
+          msg += `❌ *Eliminados (mínimo insuficiente):*\n`;
+          removedByMin.forEach(t => {
+            msg += `  • ${formatBetType(t.betType, t.betValue)} (mín: ${formatCredits(t.catMin)})\n`;
+          });
+          msg += '\n';
+        }
+        if (removedByFunds.length > 0) {
+          msg += `❌ *Eliminados (fondos insuficientes):*\n`;
+          removedByFunds.forEach(t => {
+            msg += `  • ${formatBetType(t.betType, t.betValue)}\n`;
+          });
+          msg += '\n';
+        }
+
+        msg += `✅ *Apuesta válida:*\n`;
+        workingTargets.forEach(t => { msg += `  • ${formatBetType(t.betType, t.betValue)}\n`; });
+        msg += `\n💰 ${formatCredits(amount)} × ${workingTargets.length} = ${formatCredits(totalCost)}\n`;
+        msg += `💳 Tu saldo: ${formatCredits(user.credits)}\n\n`;
+        msg += `Reaccioná a este mensaje con 👍 para confirmar _(expira en 2 min)_.`;
+
+        const replyMsg = await message.reply(msg);
+        const previewMsgId = replyMsg.id._serialized;
+
+        const timeoutId = setTimeout(() => {
+          pendingBetReactions.delete(previewMsgId);
+        }, 2 * 60 * 1000);
+
+        pendingBetReactions.set(previewMsgId, {
+          msgId: previewMsgId,
+          userId,
+          groupId,
+          amount,
+          targets: workingTargets,
+          activeGameId: activeGame.id,
+          originalMsgId: message.id._serialized,
+          timeoutId
+        });
+
+        return replyMsg;
+      }
+
+      // ─── CASO B: APUESTA DIRECTA (Exitosa al instante) ───
       const newBalance = db.updateUserCredits(userId, groupId, -totalCost, 'bet',
-        `Apuesta (${parsedTargets.length} objetivo${parsedTargets.length > 1 ? 's' : ''})`);
+        `Apuesta (${workingTargets.length} objetivo${workingTargets.length > 1 ? 's' : ''})`);
 
-      for (const t of parsedTargets) {
-        db.placeBet(activeGame.id, userId, t.betType, t.betValue, amount);
+      for (const t of workingTargets) {
+        db.placeBet(activeGame.id, user.user_id, t.betType, t.betValue, amount);
       }
 
-      let confirmMsg = `🎲 *Apuesta registrada*\n\n`;
-      confirmMsg += `💰 ${formatCredits(amount)} × ${parsedTargets.length} = ${formatCredits(totalCost)}\n\n`;
-      confirmMsg += `*Tus apuestas:*\n`;
-      parsedTargets.forEach(t => { confirmMsg += `  • ${formatBetType(t.betType, t.betValue)}\n`; });
-      confirmMsg += `\n💳 Saldo restante: ${formatCredits(newBalance)}\n🎰 ¡Buena suerte!`;
-
-      return message.reply(confirmMsg);
+      return message.react('✅'); 
     }
 
-    // /admin — solo desde el grupo "Let It Ride", solo para super admins
-    if (command === "/admin") {
-      // Verificar que sea el grupo admin (si está configurado)
-      if (ADMIN_GROUP_ID && groupId !== ADMIN_GROUP_ID) {
-        return; // Silencio total fuera del grupo admin
+    if (command === "/confirmar") {
+      if (!group || !group.active)
+        return message.reply("❌ El casino no está activo en este grupo.");
+
+      const pending = pendingConfirmations.get(userId);
+      if (!pending)
+        return message.reply("❓ No tenés ninguna acción pendiente de confirmar.\n_(Las confirmaciones expiran en 2 minutos.)_");
+
+      clearTimeout(pending.timeoutId);
+      pendingConfirmations.delete(userId);
+
+      if (pending.type === 'give_user') {
+        const { giveAmount, realId, targetName } = pending.data;
+        const freshSender = db.getOrCreateUser(userId, groupId);
+        if (freshSender.credits < giveAmount)
+          return message.reply(
+            `❌ Ya no tenés suficientes créditos.\n` +
+            `💸 Querías dar: ${formatCredits(giveAmount)}\n` +
+            `💳 Tu saldo: ${formatCredits(freshSender.credits)}`
+          );
+
+        const senderName = freshSender.username || userId.split('@')[0];
+        const newSenderBalance = db.updateUserCredits(userId, groupId, -giveAmount, 'give', `Regalo a ${targetName}`);
+        db.updateUserCredits(realId, groupId, giveAmount, 'gift', `Regalo de ${senderName}`);
+
+        return message.reply(
+          `✅ *Transferencia realizada* 🎁\n\n` +
+          `💸 Le regalaste ${formatCredits(giveAmount)} a *${targetName}*.\n` +
+          `💳 Tu nuevo saldo: ${formatCredits(newSenderBalance)}`
+        );
       }
 
-      // Verificar super admin
+      if (pending.type === 'give_all') {
+        const { giveAmount, targets, totalCost } = pending.data;
+        const freshSender = db.getOrCreateUser(userId, groupId);
+        if (freshSender.credits < totalCost)
+          return message.reply(
+            `❌ Ya no tenés suficientes créditos.\n` +
+            `💸 Necesitás: ${formatCredits(totalCost)}\n` +
+            `💳 Tu saldo: ${formatCredits(freshSender.credits)}`
+          );
+
+        const senderName = freshSender.username || userId.split('@')[0];
+        const newSenderBalance = db.updateUserCredits(userId, groupId, -totalCost, 'give',
+          `Regalo grupal (${targets.length} jugadores)`);
+        for (const target of targets) {
+          db.updateUserCredits(target.user_id, groupId, giveAmount, 'gift', `Regalo de ${senderName}`);
+        }
+
+        return message.reply(
+          `✅ *Regalo grupal enviado* 🎁\n\n` +
+          `🎁 Diste ${formatCredits(giveAmount)} a *${targets.length} jugadores*.\n` +
+          `💰 Total regalado: ${formatCredits(totalCost)}\n` +
+          `💳 Tu nuevo saldo: ${formatCredits(newSenderBalance)}`
+        );
+      }
+
+      return message.reply("❓ Confirmación no reconocida. Intentá el comando de nuevo.");
+    }
+
+    if (command === "/admin") {
+      if (ADMIN_GROUP_ID && groupId !== ADMIN_GROUP_ID) {
+        return; 
+      }
+
       const number = userId.split('@')[0].split(':')[0];
       if (!SUPER_ADMINS.includes(number)) return;
 
       const sub = (parts[1] || "resumen").toLowerCase();
+      
+      // ─── COMANDO ADMIN GIVE ─────────────────────────────────────
+      if (sub === "give") {
+        const amount = parseInt(parts[2]) || 0;
+        
+        if (!amount || amount < 1)
+          return message.reply("❌ Uso: `/admin give <cantidad>`");
+        
+        // Caso especial: selección de grupo después de mostrar lista
+        if (pendingAdminGive && parts[3] && /^\d+$/.test(parts[3])) {
+          const groupIndex = parseInt(parts[3]) - 1;
+          const { amount: savedAmount, activeGroups } = pendingAdminGive;
+          
+          if (groupIndex >= 0 && groupIndex < activeGroups.length) {
+            const targetGroup = activeGroups[groupIndex];
+            db.updateUserCredits(userId, targetGroup.group_id, savedAmount, 'credit', 'Admin give directo');
+            const user = db.getOrCreateUser(userId, targetGroup.group_id);
+            
+            // Limpiar estado pendiente
+            pendingAdminGive = null;
+            
+            return message.reply(
+              `✅ *Créditos agregados* 🎁\n\n` +
+              `💰 ${formatCredits(savedAmount)} agregados a ${user.username || 'Sora'}\n` +
+              `🎰 Grupo: ${targetGroup.group_name}\n` +
+              `💳 Nuevo saldo: ${formatCredits(user.credits)}`
+            );
+          } else {
+            return message.reply("❌ Número de grupo inválido.");
+          }
+        }
+        
+        // Obtener todos los grupos activos
+        const activeGroups = db.getActiveGroups();
+        
+        if (activeGroups.length === 1) {
+          // Solo hay un grupo, dar créditos directamente
+          const targetGroup = activeGroups[0];
+          db.updateUserCredits(userId, targetGroup.group_id, amount, 'credit', 'Admin give directo');
+          const user = db.getOrCreateUser(userId, targetGroup.group_id);
+          return message.reply(
+            `✅ *Créditos agregados* 🎁\n\n` +
+            `💰 ${formatCredits(amount)} agregados a ${user.username || 'Sora'}\n` +
+            `🎰 Grupo: ${targetGroup.group_name}\n` +
+            `💳 Nuevo saldo: ${formatCredits(user.credits)}`
+          );
+        }
+        
+        // Múltiples grupos: mostrar lista para selección
+        let groupList = `🎰 *Selecciona el grupo destino:*\n\n`;
+        activeGroups.forEach((g, i) => {
+          groupList += `${i + 1}. ${g.group_name}\n`;
+        });
+        groupList += `\n💡 Usa: \`/admin give <cantidad> <número>\``;
+        
+        // Guardar cantidad para el siguiente comando
+        pendingAdminGive = { amount, activeGroups };
+        
+        return message.reply(groupList);
+      }
 
-      // /admin resumen — estadísticas globales
       if (sub === "resumen" || sub === "r") {
         const g = db.getGlobalStats();
         const pct = g.total_wagered > 0
@@ -793,7 +1183,6 @@ async function handleCommand(message, client) {
         return message.reply(msg);
       }
 
-      // /admin grupos — desglose por grupo
       if (sub === "grupos" || sub === "g") {
         const grupos = db.getPerGroupStats();
         if (grupos.length === 0)
@@ -813,7 +1202,6 @@ async function handleCommand(message, client) {
         return message.reply(msg);
       }
 
-      // /admin top — mejores ganadores globales
       if (sub === "top" || sub === "t") {
         const winners = db.getTopWinnersGlobal(10);
         if (winners.length === 0)
@@ -827,7 +1215,6 @@ async function handleCommand(message, client) {
         return message.reply(msg);
       }
 
-      // /admin partidas — últimas 10 partidas
       if (sub === "partidas" || sub === "p") {
         const games = db.getRecentGames(10);
         if (games.length === 0)
@@ -843,7 +1230,6 @@ async function handleCommand(message, client) {
         return message.reply(msg);
       }
 
-      // /admin creditos — top 10 global por créditos
       if (sub === "creditos" || sub === "c") {
         const topGlobal = db.getTopCreditsGlobal(10);
         if (topGlobal.length === 0)
@@ -857,7 +1243,6 @@ async function handleCommand(message, client) {
         return message.reply(msg);
       }
 
-      // /admin creditos <groupId> — top 10 de un grupo específico
       if (sub === "grupo" || sub === "gp") {
         const targetId = parts[2];
         if (!targetId)
@@ -879,7 +1264,6 @@ async function handleCommand(message, client) {
         return message.reply(msg);
       }
 
-      // Menú de ayuda admin
       return message.reply(
         `🎰 *Panel Admin — Let It Ride*\n\n` +
         `▸ \`/admin resumen\` _(o r)_ — Estadísticas globales\n` +
@@ -899,4 +1283,43 @@ async function handleCommand(message, client) {
   }
 }
 
-module.exports = { handleCommand, handlePollReaction, launchGame };
+// ─── MANEJO DE REACCIONES A APUESTAS ───────────────────────────────────────────
+async function handleBetReaction(reaction, client) {
+  try {
+    if (!['👍', '👎'].includes(reaction.reaction)) return;
+    
+    const { msgId, userId, amount, targets } = reaction;
+    const reactorId = reaction.reactorId;
+    const betUserId = userId;
+    
+    if (reactorId !== betUserId) return;
+    
+    if (reaction.reaction === '👍') {
+      // Confirmar apuesta
+      const game = db.getActiveGame(reaction.groupId);
+      if (!game) return;
+      
+      for (const target of targets) {
+        await db.placeBet(game.id, userId, target.type, target.value, amount);
+      }
+      
+      await client.sendMessage(reaction.groupId, `✅ Apuesta confirmada: ${formatCredits(amount)} en ${targets.map(t => t.value).join(', ')}`);
+    }
+    
+    // Eliminar apuesta pendiente
+    pendingConfirmations.delete(msgId);
+  } catch (error) {
+    console.error('Error en handleBetReaction:', error);
+  }
+}
+
+
+
+module.exports = { 
+  handleCommand, 
+  handlePollReaction, 
+  handleBetReaction, 
+  launchGame,
+  handleQuizCommand,
+  handleQuizPollReaction
+};
