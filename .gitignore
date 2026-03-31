@@ -6,6 +6,7 @@ node_modules/
 
 # Sesión de WhatsApp y Caché
 bot_session/
+casino_session/
 .wwebjs_cache/
 .wwebjs_auth/
 

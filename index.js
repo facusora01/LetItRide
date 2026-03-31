@@ -26,6 +26,10 @@ const client = new Client({
     clientId: "letitride-casino-bot",
     dataPath: "./casino_session"
   }),
+  webVersionCache: {
+    type: 'remote',
+    remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+  },
   puppeteer: {
     headless: true,
     executablePath: process.env.CHROMIUM_PATH || undefined,
@@ -36,7 +40,8 @@ const client = new Client({
       "--disable-dev-shm-usage",
       "--disable-gpu",
       "--disable-web-security",
-      "--disable-features=VizDisplayCompositor"
+      "--disable-features=VizDisplayCompositor",
+      "--disk-cache-size=0" // Evita que Chrome sature el disco de tu VPS
     ],
   },
 });
@@ -134,6 +139,9 @@ client.on("ready", async () => {
 });
 
 // ─── LISTENER DE REACCIONES (para el poll de /casino start y quizzes) ──────────────────
+
+const ALLOWED_REACTIONS = ['👍', '👍🏻', '👍🏼', '👍🏽', '👍🏾', '👍🏿', '1️⃣', '2️⃣', '3️⃣', '4️⃣'];
+
 client.on("message_reaction", async (reaction) => {
   // 1. Filtro Anti-Backlog: Ignorar reacciones de antes de prender el bot
   if (reaction.timestamp && reaction.timestamp < startupTime) return;
@@ -141,21 +149,16 @@ client.on("message_reaction", async (reaction) => {
   // 2. Filtro Anti-Fantasmas: Ignorar cuando un usuario quita su reacción (llega vacío)
   if (!reaction.reaction || reaction.reaction.trim() === '') return;
 
-  console.log(`🔔 REACTION EVENT 🔥`, JSON.stringify({
-    emoji: reaction.reaction,
-    sender: reaction.senderId,
-    msgId: reaction.msgId?._serialized
-  }));
+  // 3. FILTRO DE EMOJIS
+  if (!ALLOWED_REACTIONS.includes(reaction.reaction)) return;
   
   try {
-    // 3. Procesa votaciones de inicio (/casino start), confirmaciones de regalos y apuestas
+    // 4. Procesa votaciones de inicio (/casino start), confirmaciones de regalos y apuestas
     await handlePollReaction(reaction, client);
     
-    // 4. Procesa respuestas de quizzes (reacciones 1️⃣2️⃣3️⃣4️⃣)
+    // 5. Procesa respuestas de quizzes (reacciones 1️⃣2️⃣3️⃣4️⃣)
     await handleQuizPollReaction(reaction, client);
     
-    // NOTA: Borramos la llamada a handleBetReaction porque handlePollReaction 
-    // ya se encarga de todo el flujo de apuestas correctamente.
   } catch (err) {
     console.error("❌ Error en message_reaction:", err.message);
   }
@@ -165,30 +168,39 @@ client.on("message_reaction", async (reaction) => {
 let isSynced = false; 
 // ───── HANDLER DE MENSAJES ─────────────────────
 async function processMessage(message) {
-  // Filtro de mensajes antiguos (Backlog)
+  // 1. Filtro de mensajes antiguos (Backlog)
   if (message.timestamp < startupTime) return;
 
+  const body = message.body?.trim() || "";
+
+  // 2. Si no empieza con "/" y no es una letra suelta (A,B,C,D), lo descartamos AL INSTANTE
+  const isQuizAnswer = /^[ABCD]$/i.test(body);
+  if (!body.startsWith("/") && !isQuizAnswer) return;
+
+  // 3. Chequeo de tamaño
+  if (body.length > 450) return;
+
+  // 4. Identificamos de dónde viene y filtramos si no es de un grupo
+  const from = message.fromMe ? message.to : message.from;
+  if (!from.endsWith("@g.us") && !from.endsWith("@lid")) return;
+
+  // 5. Recién ahora marcamos que el sistema está sincronizado (Solo se activa con el primer comando válido)
   if (!isSynced) {
     isSynced = true;
     console.log("\n" + "=".repeat(45));
     console.log("🚀 SISTEMA SINCRONIZADO: Leyendo chat en tiempo real");
-    console.log(`📥 Primer mensaje recibido: "${message.body?.slice(0, 20)}..."`);
+    console.log(`📥 Primer mensaje útil recibido: "${body.slice(0, 20)}..."`);
     console.log("=".repeat(45) + "\n");
   }
 
-  const body = message.body?.trim() || "";
-
-  if (!body.startsWith("/") || body.length > 450) return;
-
-  const from = message.fromMe ? message.to : message.from;
-
   try {
-
-    if (!from.endsWith("@g.us") && !from.endsWith("@lid")) return;
-
     const lowerBody = body.toLowerCase();
-    const validCommands = ["/casino", "/letitride", "/bet", "/balance", "/top", "/history", "/stop", "/admin", "/spin", "/quiz"];
-    if (!validCommands.some(cmd => lowerBody.startsWith(cmd))) return;
+    
+    // 6. Validamos que sea un comando conocido (Si no es una respuesta de quiz)
+    if (!isQuizAnswer) {
+      const validCommands = ["/casino", "/letitride", "/bet", "/balance", "/top", "/history", "/stop", "/admin", "/spin", "/quiz"];
+      if (!validCommands.some(cmd => lowerBody.startsWith(cmd))) return;
+    }
 
     db.updateGroupActivity(from); 
 
@@ -202,12 +214,14 @@ async function processMessage(message) {
     }
 
     // Procesar respuestas de quiz (A, B, C, D)
-    if (/^[ABCD]$/.test(body.trim().toUpperCase())) {
-      const isQuizAnswer = await processQuizAnswer(message, client);
-      if (isQuizAnswer) return; // Si es respuesta de quiz, no procesar como comando normal
+    if (isQuizAnswer) {
+      const processed = await processQuizAnswer(message, client);
+      if (processed) return; // Si era respuesta válida de quiz, cortamos acá
     }
 
+    // Procesar el resto de los comandos normales (/bet, /balance, etc)
     await handleCommand(message, client);
+    
   } catch (error) {
     // Ignorar errores de Chrome/Puppeteer que son temporales
     if (error.message.includes("Target closed") || 
