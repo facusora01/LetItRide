@@ -5,6 +5,7 @@ const cron = require("node-cron");
 const { exec } = require("child_process");
 const db = require("./database");
 const { handleCommand, handlePollReaction, launchGame } = require("./commands");
+const { handleQuizCommand, handleQuizPollReaction } = require("./quizzes-new");
 
 // ─── CONFIGURACIÓN ────────────────────────────────────────────────────────────
 const GAME_SCHEDULE = process.env.GAME_SCHEDULE || "20:00";
@@ -56,19 +57,6 @@ client.on("ready", () => {
   console.log(`📋 Grupos activos: ${groups.length}`);
   groups.forEach((g) => console.log(`   • ${g.group_name} (${g.group_id})`));
   console.log(`\n📅 Schedulers iniciados\n`);
-
-  // ─── CARGA SEMANAL DE CRÉDITOS ─────────────────────────────────────────
-  cron.schedule(`0 0 * * ${CREDIT_DAY}`, () => {
-    console.log(`🔄 Carga semanal de créditos (${creditDayName})`);
-    db.getActiveGroups().forEach(group => {
-      db.resetWeeklyCredits(group.group_id);
-      client.sendMessage(group.group_id,
-        `💰 *¡Créditos recargados!*\n\n` +
-        `Todos los jugadores recibieron sus créditos del ${creditDayName}.\n\n` +
-        `🎰 ¡Que comiencen los juegos! 🍀`
-      );
-    });
-  }, { timezone: "America/Argentina/Buenos_Aires" });
 
   // ─── CARGA SEMANAL DE CRÉDITOS ─────────────────────────────────────────
   cron.schedule(`0 0 * * ${CREDIT_DAY}`, () => {
@@ -156,14 +144,18 @@ client.on("ready", () => {
   }, { timezone: "America/Argentina/Buenos_Aires" });
 });
 
-// ─── LISTENER DE REACCIONES (para el poll de /casino start) ──────────────────
+// ─── LISTENER DE REACCIONES (para el poll de /casino start y quizzes) ────────
 client.on("message_reaction", async (reaction) => {
-  // Timeout de seguridad: si el handler tarda más de 5s, se cancela
   const timeout = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error("handlePollReaction timeout")), 5000)
+    setTimeout(() => reject(new Error("Timeout procesando reacción")), 5000)
   );
   try {
-    await Promise.race([handlePollReaction(reaction, client), timeout]);
+    // 👈 ACÁ AGREGAMOS handleQuizPollReaction
+    await Promise.race([
+      handlePollReaction(reaction, client),
+      handleQuizPollReaction(reaction, client), 
+      timeout
+    ]);
   } catch (err) {
     console.error("❌ Error en message_reaction:", err.message);
   }
@@ -174,20 +166,25 @@ async function processMessage(message) {
   const body = message.body?.trim() || "";
   if (!body.startsWith("/") || body.length > 450) return;
 
-  // Si el mensaje es del propio bot (fromMe), el grupo está en message.to
   const from = message.fromMe ? message.to : message.from;
 
   try {
     if (!from.endsWith("@g.us") && !from.endsWith("@lid")) return;
 
     const lowerBody = body.toLowerCase();
-    const validCommands = ["/casino", "/letitride", "/bet", "/balance", "/top", "/history", "/stop", "/admin"];
+    // 👈 ACÁ AGREGAMOS "/quiz" A LA LISTA
+    const validCommands = ["/casino", "/letitride", "/bet", "/balance", "/top", "/history", "/stop", "/admin", "/quiz"];
     if (!validCommands.some(cmd => lowerBody.startsWith(cmd))) return;
 
     const logBody = body.length > 100 ? body.slice(0, 100) + "..." : body;
     console.log(`\n🎰 [${new Date().toLocaleTimeString("es-AR")}] ${from}: "${logBody}"`);
 
-    await handleCommand(message, client);
+    // 👈 ACÁ SEPARAMOS LA LÓGICA
+    if (lowerBody.startsWith("/quiz")) {
+      await handleQuizCommand(message, client);
+    } else {
+      await handleCommand(message, client);
+    }
   } catch (error) {
     console.error("❌ Error en processMessage:", error.message);
   }
