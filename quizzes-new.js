@@ -487,43 +487,39 @@ async function handleQuizPollReaction(reaction, client) {
   const senderId = reaction.senderId;
   const emoji = reaction.reaction;
   
-  // 1. Intentar extraer los datos venga como venga
+  // Extraer el ID del grupo desde el mensaje (Si viene en el formato msgId)
   const rawId = reaction.msgId?._serialized || reaction.msgId?.id || reaction.msgId || "";
-  const strId = typeof rawId === 'object' ? JSON.stringify(rawId) : String(rawId);
-  const baseId = strId.split(/[_"]/).find(p => p.length > 15 && /^[A-F0-9]+$/i.test(p)) || strId;
+  let reactionGroupId = null;
+  if (typeof rawId === 'string' && rawId.includes('@g.us')) {
+      reactionGroupId = rawId.split('_').find(p => p.includes('@g.us'));
+  }
+
+  // 1. Obtener el quiz activo DE LA MEMORIA CENTRAL, no del mapa temporal
+  const groupId = reactionGroupId || reaction.msgId?.remote;
   
-  // Intentar deducir el grupo si el ID vino roto
-  const reactionGroupId = reaction.msgId?.remote || (strId.includes('@g.us') ? strId.split('_').find(p => p.includes('@g.us')) : null);
+  let targetQuizData = null;
+  let activeGroupId = null;
 
-  let targetQuiz = null;
-
-  // 2. ESTRATEGIA DE MATCHEO TRIPLE
-  for (const [key, pending] of pendingQuizReactions.entries()) {
-    const quizBaseId = key.split('_').find(p => p.length > 15 && /^[A-F0-9]+$/i.test(p)) || key;
-    
-    // A) Matcheo exacto por Hash del mensaje
-    if (baseId && baseId === quizBaseId) {
-      targetQuiz = pending;
-      break;
-    }
-    // B) Matcheo por Grupo (Como solo hay 1 quiz por grupo a la vez, esto es 100% seguro)
-    if (reactionGroupId && pending.groupId === reactionGroupId) {
-      targetQuiz = pending;
-      break;
+  if (groupId) {
+    targetQuizData = getActiveQuiz(groupId);
+    activeGroupId = groupId;
+  } else {
+    // Fallback: Si WhatsApp no nos dio el ID del grupo, buscamos en pendingQuizReactions
+    for (const [key, pending] of pendingQuizReactions.entries()) {
+      if (pending.groupId) {
+        targetQuizData = getActiveQuiz(pending.groupId);
+        if (targetQuizData) {
+            activeGroupId = pending.groupId;
+            break;
+        }
+      }
     }
   }
 
-  // C) Fallback Extremo: Si falló todo, pero sabemos que hay UN SOLO quiz corriendo en todo el bot
-  if (!targetQuiz && pendingQuizReactions.size === 1) {
-    targetQuiz = pendingQuizReactions.values().next().value;
-  }
+  if (!targetQuizData || targetQuizData.status !== 'active') return;
 
-  if (!targetQuiz) return; // Si no hay match posible, ignoramos
-
-  const { groupId, quizData } = targetQuiz;
-  
-  // FIX AL BUG DE TIEMPO: Forzar los 15 segundos para que "submitAnswer" no lo rechace injustamente
-  quizData.timeLimit = 15000; 
+  // FIX AL BUG DE TIEMPO: Forzar los 15 segundos extra para compensar lag de red
+  targetQuizData.timeLimit = 20000; 
 
   // Verificar si el emoji es una opción válida (1️⃣ 2️⃣ 3️⃣ 4️⃣)
   const optionIndex = EMOJI_TO_INDEX[emoji];
@@ -532,11 +528,11 @@ async function handleQuizPollReaction(reaction, client) {
   // Convertir índice a letra (0 -> A, 1 -> B, etc.)
   const answerLetter = INDEX_TO_LETTER[optionIndex];
   
-  // Registrar la respuesta
-  const success = submitAnswer(groupId, senderId, answerLetter);
+  // Registrar la respuesta usando la función oficial de quiz-manager
+  const success = submitAnswer(activeGroupId, senderId, answerLetter);
   
   if (success) {
-    console.log(`✅ RESPUESTA REGISTRADA: Voto por la ${answerLetter} en ${groupId}`);
+    console.log(`✅ QUIZ VOTO: ${senderId} votó por la ${answerLetter} en ${activeGroupId}`);
   }
 }
 
