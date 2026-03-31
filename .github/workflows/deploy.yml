@@ -56,7 +56,7 @@ jobs:
             # 3. REINICIO CON AUMENTO DE MEMORIA (FIX PARA EL 91% HEAP)
             # Le asignamos 512MB de RAM explícitamente para evitar el lag
             pm2 delete let-it-ride || true
-            pm2 start index.js --name let-it-ride --node-args="--max-old-space-size=512"
+            pm2 start index.js --name let-it-ride
             
             # 4. PERSISTENCIA
             pm2 save
