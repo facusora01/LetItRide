@@ -166,18 +166,29 @@ client.on("message_reaction", async (reaction) => {
 
 
 let isSynced = false; 
+const processedMessages = new Set(); // Memoria a corto plazo para evitar duplicados
+
 // ───── HANDLER DE MENSAJES ─────────────────────
 async function processMessage(message) {
   // 1. Filtro de mensajes antiguos (Backlog)
   if (message.timestamp < startupTime) return;
 
+  // 2. (Bloquea lecturas repetidas del mismo mensaje)
+  const msgId = message.id?._serialized;
+  if (msgId) {
+    if (processedMessages.has(msgId)) return; // Si ya lo leímos, chau
+    processedMessages.add(msgId);
+    // Borramos el ID de la memoria después de 30 segundos para no gastar RAM
+    setTimeout(() => processedMessages.delete(msgId), 30000);
+  }
+
   const body = message.body?.trim() || "";
 
-  // 2. Si no empieza con "/" y no es una letra suelta (A,B,C,D), lo descartamos AL INSTANTE
+  // 3. Si no empieza con "/" y no es una letra suelta (A,B,C,D), lo descartamos
   const isQuizAnswer = /^[ABCD]$/i.test(body);
   if (!body.startsWith("/") && !isQuizAnswer) return;
 
-  // 3. Chequeo de tamaño
+  // 4. Chequeo de tamaño
   if (body.length > 450) return;
 
   // 4. Identificamos de dónde viene y filtramos si no es de un grupo
