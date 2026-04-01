@@ -17,6 +17,7 @@ const SUPER_ADMINS = ["5491100000000", "541100000000", "100000000000000"];
 const QUIZ_THRESHOLD = parseFloat(process.env.QUIZ_THRESHOLD) || 0.05; // 5% del grupo
 const QUIZ_TIME_LIMIT = 15000; // 15 segundos fijos
 
+// Solo Tests (Borrar luego)
 // Mapa de emojis a índices de respuesta
 const EMOJI_TO_INDEX = {
   '1️⃣': 0, '1': 0, '1⃣': 0,
@@ -489,6 +490,9 @@ async function handleQuizPollReaction(reaction, client) {
     if (!senderId) return;
 
     const emoji = reaction.reaction?.trim() || "";
+    
+    // Log para debug: ver si el bot está reaccionando
+    console.log(`🧠 QuizReaction: Emoji ${emoji} de ${senderId}`);
     
     // 1. Extractor Universal de IDs
     const rawId = reaction.msgId?._serialized || reaction.msgId?.id || reaction.msgId || "";

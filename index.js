@@ -5,7 +5,8 @@ const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
 const cron = require("node-cron");
 const db = require("./database");
-const { handleCommand, handlePollReaction, handleBetReaction, launchGame, handleQuizCommand, handleQuizPollReaction } = require("./commands");
+const { handleCommand, handlePollReaction, launchGame, handleQuizPollReaction, handleBetReaction, handleQuizCommand } = require("./commands");
+const { handleQuizPollVote } = require("./quizzes.js");
 const { processQuizAnswer } = require("./quizzes-new");
 
 // ─── CONFIGURACIÓN ────────────────────────────────────────────────────────────
@@ -149,19 +150,34 @@ client.on("message_reaction", async (reaction) => {
 
   // 2. ⚡ FILTRO INTELIGENTE DE EMOJIS (A prueba de Android/iOS)
   const emoji = reaction.reaction;
-  const isValid = emoji.includes('👍') || /[1-4]/.test(emoji);
+  const isValidReaction = ALLOWED_REACTIONS.includes(emoji);
   
-  if (!isValid) return; 
+  if (!isValidReaction) return;
 
   // Logueamos para que veas en consola que sí te reconoció
   let sender = reaction.senderId || "Dueño/Bot";
-  console.log(`🔔 REACTION EVENT 🔥 | Emoji: ${emoji} | De: ${sender}`);
+  const isFromBot = reaction.fromMe || sender.includes("Bot") || sender === client.info.wid._serialized;
+  console.log(`🔔 REACTION EVENT 🔥 | Emoji: ${emoji} | De: ${sender} ${isFromBot ? '(BOT)' : '(Usuario)'}`);
   
   try {
     await handlePollReaction(reaction, client);
-    await handleQuizPollReaction(reaction, client);
+    // Solo procesar reacciones de quiz si son emojis numéricos [1️⃣,2️⃣,3️⃣,4️⃣]
+    const isQuizEmoji = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '1⃣', '2⃣', '3⃣', '4⃣'].includes(emoji);
+    if (isQuizEmoji) {
+      await handleQuizPollReaction(reaction, client);
+    }
   } catch (err) {
     console.error("❌ Error en message_reaction:", err.message);
+  }
+});
+
+// ─── VOTOS DE POLL (quiz y votaciones nativas de WhatsApp) ────────────────────
+client.on("message_create", async (msg) => {
+  if (msg.type !== "poll_vote") return;
+  try {
+    await handleQuizPollVote(msg, client);
+  } catch (err) {
+    console.error("❌ Error en poll_vote:", err.message);
   }
 });
 
