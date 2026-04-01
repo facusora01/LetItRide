@@ -482,59 +482,67 @@ async function processQuizAnswer(message, client) {
   return success;
 }
 
-// ─── MANEJO DE REACCIONES DE QUIZ ───────────────────────────────────────────────
+// ─── MANEJO DE REACCIONES DE QUIZ (ULTRA ROBUSTO) ───────────────────────────────
 async function handleQuizPollReaction(reaction, client) {
-  const senderId = reaction.senderId;
-  const emoji = reaction.reaction;
-  
-  // Extraer el ID del grupo desde el mensaje (Si viene en el formato msgId)
-  const rawId = reaction.msgId?._serialized || reaction.msgId?.id || reaction.msgId || "";
-  let reactionGroupId = null;
-  if (typeof rawId === 'string' && rawId.includes('@g.us')) {
-      reactionGroupId = rawId.split('_').find(p => p.includes('@g.us'));
-  }
+  try {
+    const senderId = reaction.senderId || reaction.id?.participant || reaction.author;
+    if (!senderId) return;
 
-  // 1. Obtener el quiz activo DE LA MEMORIA CENTRAL, no del mapa temporal
-  const groupId = reactionGroupId || reaction.msgId?.remote;
-  
-  let targetQuizData = null;
-  let activeGroupId = null;
+    const emoji = reaction.reaction?.trim() || "";
+    
+    // 1. Extractor Universal de IDs
+    const rawId = reaction.msgId?._serialized || reaction.msgId?.id || reaction.msgId || "";
+    const strId = typeof rawId === 'object' ? JSON.stringify(rawId) : String(rawId);
+    const parts = strId.split(/[_"]/);
+    const baseId = parts.find(p => p.length > 15 && /^[A-F0-9]+$/i.test(p)) || strId;
 
-  if (groupId) {
-    targetQuizData = getActiveQuiz(groupId);
-    activeGroupId = groupId;
-  } else {
-    // Fallback: Si WhatsApp no nos dio el ID del grupo, buscamos en pendingQuizReactions
-    for (const [key, pending] of pendingQuizReactions.entries()) {
-      if (pending.groupId) {
-        targetQuizData = getActiveQuiz(pending.groupId);
-        if (targetQuizData) {
-            activeGroupId = pending.groupId;
-            break;
-        }
+    // 2. Localizar el quiz activo
+    let targetQuizData = null;
+    let targetGroupId = null;
+
+    for (const [msgId, pending] of pendingQuizReactions.entries()) {
+      const pParts = msgId.split('_');
+      const pBaseId = pParts.find(p => p.length > 15 && /^[A-F0-9]+$/i.test(p)) || msgId;
+      if (pBaseId === baseId) {
+        targetQuizData = getActiveQuiz(pending.groupId); 
+        targetGroupId = pending.groupId;
+        break;
       }
     }
-  }
 
-  if (!targetQuizData || targetQuizData.status !== 'active') return;
+    if (!targetQuizData) {
+      let reactionGroupId = null;
+      if (strId.includes('@g.us')) {
+        reactionGroupId = strId.split('_').find(p => p.includes('@g.us'));
+      }
+      const fallbackGroupId = reactionGroupId || reaction.msgId?.remote;
+      if (fallbackGroupId) {
+        targetQuizData = getActiveQuiz(fallbackGroupId);
+        targetGroupId = fallbackGroupId;
+      }
+    }
 
-  // FIX AL BUG DE TIEMPO: Forzar los 15 segundos extra para compensar lag de red
-  targetQuizData.timeLimit = 20000; 
+    if (!targetQuizData) return;
 
-  // Verificar si el emoji es una opción válida (1️⃣ 2️⃣ 3️⃣ 4️⃣)
-  const optionIndex = EMOJI_TO_INDEX[emoji];
-  if (optionIndex === undefined) return;
-  
-  // Convertir índice a letra (0 -> A, 1 -> B, etc.)
-  const answerLetter = INDEX_TO_LETTER[optionIndex];
-  
-  // Registrar la respuesta usando la función oficial de quiz-manager
-  const success = submitAnswer(activeGroupId, senderId, answerLetter);
-  
-  if (success) {
-    console.log(`✅ QUIZ VOTO: ${senderId} votó por la ${answerLetter} en ${activeGroupId}`);
+    // 3. 🧠 TRADUCTOR INTELIGENTE: Extrae el número sin importar cómo esté codificado
+    const digitMatch = emoji.match(/[1-4]/);
+    if (!digitMatch) return; // Si no hay un número del 1 al 4, ignora
+    
+    // Convierte el número encontrado a la letra correspondiente (1=A, 2=B, 3=C, 4=D)
+    const options = ['A', 'B', 'C', 'D'];
+    const answerLetter = options[parseInt(digitMatch[0]) - 1];
+    
+    // 4. Inyección Directa: Registra el voto saltándose bloqueos de tiempo por lag
+    if (!targetQuizData.responses.has(senderId)) {
+      targetQuizData.responses.set(senderId, answerLetter);
+      console.log(`✅ QUIZ VOTO: ${senderId} eligió la opción ${answerLetter} (${emoji}) en ${targetGroupId}`);
+    }
+
+  } catch (err) {
+    console.error("❌ Error salvaje en handleQuizPollReaction:", err.message);
   }
 }
+
 
 module.exports = {
   handleQuizCommand,

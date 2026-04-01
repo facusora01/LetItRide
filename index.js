@@ -142,23 +142,24 @@ client.on("ready", async () => {
 
 const ALLOWED_REACTIONS = ['👍', '👍🏻', '👍🏼', '👍🏽', '👍🏾', '👍🏿', '1️⃣', '2️⃣', '3️⃣', '4️⃣'];
 
+// ─── LISTENER DE REACCIONES ────────────────────────────────────────────────────
 client.on("message_reaction", async (reaction) => {
-  // 1. Filtro Anti-Backlog: Ignorar reacciones de antes de prender el bot
-  if (reaction.timestamp && reaction.timestamp < startupTime) return;
-
-  // 2. Filtro Anti-Fantasmas: Ignorar cuando un usuario quita su reacción (llega vacío)
+  // 1. Filtro Anti-Fantasmas
   if (!reaction.reaction || reaction.reaction.trim() === '') return;
 
-  // 3. FILTRO DE EMOJIS
-  if (!ALLOWED_REACTIONS.includes(reaction.reaction)) return;
+  // 2. ⚡ FILTRO INTELIGENTE DE EMOJIS (A prueba de Android/iOS)
+  const emoji = reaction.reaction;
+  const isValid = emoji.includes('👍') || /[1-4]/.test(emoji);
+  
+  if (!isValid) return; 
+
+  // Logueamos para que veas en consola que sí te reconoció
+  let sender = reaction.senderId || "Dueño/Bot";
+  console.log(`🔔 REACTION EVENT 🔥 | Emoji: ${emoji} | De: ${sender}`);
   
   try {
-    // 4. Procesa votaciones de inicio (/casino start), confirmaciones de regalos y apuestas
     await handlePollReaction(reaction, client);
-    
-    // 5. Procesa respuestas de quizzes (reacciones 1️⃣2️⃣3️⃣4️⃣)
     await handleQuizPollReaction(reaction, client);
-    
   } catch (err) {
     console.error("❌ Error en message_reaction:", err.message);
   }
