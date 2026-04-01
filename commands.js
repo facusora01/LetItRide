@@ -311,19 +311,28 @@ async function executeConfirmedGive(pending, client) {
       `✅ *Regalo grupal enviado* 🎁\n\n` +
       `🎁 Diste ${formatCredits(giveAmount)} a *${targets.length} jugadores*.\n` +
       `💰 Total regalado: ${formatCredits(totalCost)}\n` +
-      `💳 Tu nuevo saldo: ${formatCredits(newSenderBalance)}`
+      `💳 Saldo restante: ${formatCredits(newSenderBalance)}`
     );
   }
 }
 
 async function handlePollReaction(reaction, client) {
   try {
-    // Extractor Universal
-    const rawId = reaction.msgId?._serialized || reaction.msgId?.id || reaction.msgId || "";
-    const strId = typeof rawId === 'object' ? JSON.stringify(rawId) : String(rawId);
+    // Debug: mostrar estructura de reaction
+    console.log(`🧠 Debug reaction structure:`, {
+      msgId: reaction.msgId,
+      messageId: reaction.message?.id?._serialized,
+      senderId: reaction.senderId,
+      reaction: reaction.reaction
+    });
     
+    // Extractor Universal
+    const rawId = reaction.msgId?._serialized || reaction.msgId?.id || reaction.msgId || reaction.message?.id?._serialized || "";
+    const strId = typeof rawId === 'object' ? JSON.stringify(rawId) : String(rawId);
     const parts = strId.split(/[_"]/);
     const baseId = parts.find(p => p.length > 15 && /^[A-F0-9]+$/i.test(p)) || strId;
+    
+    console.log(`🧠 Debug: rawId=${rawId}, baseId=${baseId}`);
 
     // ── 1. Confirmación de apuestas ajustadas por reacción ──
     let betMatch = null;

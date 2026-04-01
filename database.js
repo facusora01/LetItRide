@@ -352,7 +352,7 @@ function getTopUsers(groupId, limit = 10) {
   `).all(groupId, limit);
 }
 
-// ✅ FIX BUG #3: Nueva función para evitar llamar db.prepare() desde commands.js e index.js
+// FIX BUG #3: Nueva función para evitar llamar db.prepare() desde commands.js e index.js
 function getUserCount(groupId) {
   return db.prepare(`SELECT COUNT(*) as count FROM users WHERE group_id = ?`).get(groupId).count;
 }
@@ -419,7 +419,7 @@ function placeBet(gameId, userId, betType, betValue, amount) {
   return db.prepare(`SELECT * FROM bets WHERE id = ?`).get(result.lastInsertRowid);
 }
 
-// ✅ FIX BUG #4: JOIN corregido — ahora filtra por group_id para no mezclar jugadores entre grupos
+// FIX BUG #4: JOIN — ahora filtra por group_id para no mezclar jugadores entre grupos
 function getGameBets(gameId) {
   return db.prepare(`
     SELECT b.*, u.username 
@@ -439,7 +439,7 @@ function getUserBets(userId, gameId) {
   `).all(gameId, userId);
 }
 
-// ✅ FIX BUG #5: Nueva función para no llamar db.prepare() desde commands.js e index.js
+// FIX BUG #5: Nueva función para no llamar db.prepare() desde commands.js e index.js
 function updateBetStatus(betId, payout, status) {
   db.prepare(`UPDATE bets SET payout = ?, status = ? WHERE id = ?`).run(payout, status, betId);
 }

@@ -32,7 +32,7 @@ const client = new Client({
     remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
   },
   puppeteer: {
-    headless: true,
+    headless: "new", // Usar el nuevo modo headless de Chrome
     executablePath: process.env.CHROMIUM_PATH || undefined,
     browser: process.env.BROWSER_TYPE || "chrome",
     args: [
@@ -42,8 +42,17 @@ const client = new Client({
       "--disable-gpu",
       "--disable-web-security",
       "--disable-features=VizDisplayCompositor",
-      "--disk-cache-size=0" // Evita que Chrome sature el disco de tu VPS
+      "--disable-background-timer-throttling",
+      "--disable-backgrounding-occluded-windows",
+      "--disable-renderer-backgrounding",
+      "--disable-background-networking",
+      "--disk-cache-size=0", // Evita que Chrome sature el disco de tu VPS
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--disable-default-apps"
     ],
+    defaultViewport: null,
+    timeout: 60000, // 60 segundos timeout
   },
 });
 
@@ -139,33 +148,32 @@ client.on("ready", async () => {
   console.log("🧠 Quizzes: activación manual únicamente (/quiz start)");
 });
 
-// ─── LISTENER DE REACCIONES (para el poll de /casino start y quizzes) ──────────────────
+// ─── NORMALIZACIÓN DE EMOJIS ──────────────────────────────────────────────────
+// WhatsApp envía emojis numéricos con o sin el selector de variación U+FE0F
+function normalizeEmoji(e) { return e.replace(/\uFE0F/g, ''); }
 
-const ALLOWED_REACTIONS = ['👍', '👍🏻', '👍🏼', '👍🏽', '👍🏾', '👍🏿', '1️⃣', '2️⃣', '3️⃣', '4️⃣'];
+const ALLOWED_RAW    = ['👍','👍🏻','👍🏼','👍🏽','👍🏾','👍🏿'];
+const ALLOWED_DIGITS = ['1️⃣','2️⃣','3️⃣','4️⃣']; // ya normalizados (sin FE0F)
 
-// ─── LISTENER DE REACCIONES ────────────────────────────────────────────────────
 client.on("message_reaction", async (reaction) => {
-  // 1. Filtro Anti-Fantasmas
   if (!reaction.reaction || reaction.reaction.trim() === '') return;
 
-  // 2. ⚡ FILTRO INTELIGENTE DE EMOJIS (A prueba de Android/iOS)
-  const emoji = reaction.reaction;
-  const isValidReaction = ALLOWED_REACTIONS.includes(emoji);
-  
-  if (!isValidReaction) return;
+  const emoji    = reaction.reaction;
+  const emojiN   = normalizeEmoji(emoji);          // normalizar para comparar
+  const isThumb  = ALLOWED_RAW.includes(emojiN);
+  const isDigit  = ALLOWED_DIGITS.includes(emojiN);
 
-  // Logueamos para que veas en consola que sí te reconoció
-  let sender = reaction.senderId || "Dueño/Bot";
-  const isFromBot = reaction.fromMe || sender.includes("Bot") || sender === client.info.wid._serialized;
-  console.log(`🔔 REACTION EVENT 🔥 | Emoji: ${emoji} | De: ${sender} ${isFromBot ? '(BOT)' : '(Usuario)'}`);
-  
+  if (!isThumb && !isDigit) return;
+
+  const sender = reaction.senderId || "Dueño/Bot";
+  console.log(`🔔 REACTION EVENT 🔥 | Emoji: ${emoji} (norm: ${emojiN}) | De: ${sender}`);
+
   try {
-    await handlePollReaction(reaction, client);
-    // Solo procesar reacciones de quiz si son emojis numéricos [1️⃣,2️⃣,3️⃣,4️⃣]
-    const isQuizEmoji = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '1⃣', '2⃣', '3⃣', '4⃣'].includes(emoji);
-    if (isQuizEmoji) {
-      await handleQuizPollReaction(reaction, client);
-    }
+    // Procesar solo reacciones de thumbs para votaciones de casino
+    if (isThumb) await handlePollReaction(reaction, client);
+    
+    // Procesar solo reacciones de dígitos para quizzes
+    if (isDigit) await handleQuizPollReaction(reaction, client);
   } catch (err) {
     console.error("❌ Error en message_reaction:", err.message);
   }

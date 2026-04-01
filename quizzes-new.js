@@ -156,7 +156,7 @@ async function startQuizDirectly(groupId, difficulty, client) {
     }
     
     // Crear quiz directamente
-    const quizData = await createQuiz(groupId, difficulty);
+    const quizData = await createQuiz(groupId, difficulty, 20000); // Forzar 20 segundos para compensar latencia
     if (!quizData) {
       await client.sendMessage(groupId, "❌ *Error:* No se pudo crear el quiz. Intenta más tarde.");
       return;
@@ -483,68 +483,50 @@ async function processQuizAnswer(message, client) {
   return success;
 }
 
-// ─── MANEJO DE REACCIONES DE QUIZ (ULTRA ROBUSTO) ───────────────────────────────
+// Mapeo de emoji normalizado → índice de opción
+const DIGIT_TO_INDEX = { '1⃣': 0, '2⃣': 1, '3⃣': 2, '4⃣': 3 };
+
 async function handleQuizPollReaction(reaction, client) {
-  try {
-    const senderId = reaction.senderId || reaction.id?.participant || reaction.author;
-    if (!senderId) return;
+  if (!reaction.message) return;
 
-    const emoji = reaction.reaction?.trim() || "";
-    
-    // Log para debug: ver si el bot está reaccionando
-    console.log(`🧠 QuizReaction: Emoji ${emoji} de ${senderId}`);
-    
-    // 1. Extractor Universal de IDs
-    const rawId = reaction.msgId?._serialized || reaction.msgId?.id || reaction.msgId || "";
-    const strId = typeof rawId === 'object' ? JSON.stringify(rawId) : String(rawId);
-    const parts = strId.split(/[_"]/);
-    const baseId = parts.find(p => p.length > 15 && /^[A-F0-9]+$/i.test(p)) || strId;
-
-    // 2. Localizar el quiz activo
-    let targetQuizData = null;
-    let targetGroupId = null;
-
-    for (const [msgId, pending] of pendingQuizReactions.entries()) {
-      const pParts = msgId.split('_');
-      const pBaseId = pParts.find(p => p.length > 15 && /^[A-F0-9]+$/i.test(p)) || msgId;
-      if (pBaseId === baseId) {
-        targetQuizData = getActiveQuiz(pending.groupId); 
-        targetGroupId = pending.groupId;
-        break;
+  // Extraer groupId del mensaje de reacción
+  let from = reaction.message.from;
+  
+  // Verificar que el ID contenga @g.us para asegurar que es un grupo
+  if (!from.includes('@g.us')) {
+    // Si no tiene @g.us, intentar extraer del msgId._serialized
+    const msgId = reaction.message.id?._serialized;
+    if (msgId) {
+      const groupIdFromMsg = msgId.split('_').find(p => p.includes('@g.us'));
+      if (groupIdFromMsg) {
+        from = groupIdFromMsg;
       }
     }
-
-    if (!targetQuizData) {
-      let reactionGroupId = null;
-      if (strId.includes('@g.us')) {
-        reactionGroupId = strId.split('_').find(p => p.includes('@g.us'));
-      }
-      const fallbackGroupId = reactionGroupId || reaction.msgId?.remote;
-      if (fallbackGroupId) {
-        targetQuizData = getActiveQuiz(fallbackGroupId);
-        targetGroupId = fallbackGroupId;
-      }
-    }
-
-    if (!targetQuizData) return;
-
-    // 3. 🧠 TRADUCTOR INTELIGENTE: Extrae el número sin importar cómo esté codificado
-    const digitMatch = emoji.match(/[1-4]/);
-    if (!digitMatch) return; // Si no hay un número del 1 al 4, ignora
-    
-    // Convierte el número encontrado a la letra correspondiente (1=A, 2=B, 3=C, 4=D)
-    const options = ['A', 'B', 'C', 'D'];
-    const answerLetter = options[parseInt(digitMatch[0]) - 1];
-    
-    // 4. Inyección Directa: Registra el voto saltándose bloqueos de tiempo por lag
-    if (!targetQuizData.responses.has(senderId)) {
-      targetQuizData.responses.set(senderId, answerLetter);
-      console.log(`✅ QUIZ VOTO: ${senderId} eligió la opción ${answerLetter} (${emoji}) en ${targetGroupId}`);
-    }
-
-  } catch (err) {
-    console.error("❌ Error salvaje en handleQuizPollReaction:", err.message);
   }
+  
+  const senderId = reaction.senderId;
+  const emojiN   = reaction.reaction.replace(/\uFE0F/g, '');
+
+  const idx = DIGIT_TO_INDEX[emojiN];
+  if (idx === undefined) return;
+
+  // Buscar quiz activo usando el sistema nuevo
+  const q = getActiveQuiz(from);
+  if (!q || q.status !== 'active') return;
+
+  // Verificar que la reacción es sobre el mensaje del quiz
+  const reactedMsgId = reaction.message.id?._serialized;
+  console.log(`🧠 Debug: reactedMsgId=${reactedMsgId}, quizMessageId=${q.quizMessageId}`);
+  
+  // Si hay un quizMessageId definido, verificar que coincide
+  if (q.quizMessageId && reactedMsgId && reactedMsgId !== q.quizMessageId) {
+    console.log(`🧠 Skip: Mensaje no coincide con quiz`);
+    return;
+  }
+
+  const answerLetter = String.fromCharCode(65 + idx); // 0→A, 1→B, etc.
+  const ok = submitAnswer(from, senderId, answerLetter);
+  if (ok) console.log(`🧠 Quiz respuesta: ${senderId} → ${answerLetter} (${emojiN})`);
 }
 
 
