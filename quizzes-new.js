@@ -487,17 +487,22 @@ async function processQuizAnswer(message, client) {
 const DIGIT_TO_INDEX = { '1⃣': 0, '2⃣': 1, '3⃣': 2, '4⃣': 3 };
 
 async function handleQuizPollReaction(reaction, client) {
-  if (!reaction.message) return;
+  // Extraer ID del mensaje usando la misma lógica que handlePollReaction
+  const rawId = reaction.msgId?._serialized || reaction.msgId?.id || reaction.msgId || reaction.message?.id?._serialized || "";
+  const strId = typeof rawId === 'object' ? JSON.stringify(rawId) : String(rawId);
+  const parts = strId.split(/[_"]/);
+  const baseId = parts.find(p => p.length > 15 && /^[A-F0-9]+$/i.test(p)) || strId;
+  
+  if (!rawId) return;
 
   // Extraer groupId del mensaje de reacción
-  let from = reaction.message.from;
+  let from = reaction.message?.from;
   
   // Verificar que el ID contenga @g.us para asegurar que es un grupo
-  if (!from.includes('@g.us')) {
-    // Si no tiene @g.us, intentar extraer del msgId._serialized
-    const msgId = reaction.message.id?._serialized;
-    if (msgId) {
-      const groupIdFromMsg = msgId.split('_').find(p => p.includes('@g.us'));
+  if (!from || !from.includes('@g.us')) {
+    // Si no tiene @g.us, intentar extraer del msgId
+    if (rawId && typeof rawId === 'string') {
+      const groupIdFromMsg = rawId.split('_').find(p => p.includes('@g.us'));
       if (groupIdFromMsg) {
         from = groupIdFromMsg;
       }
@@ -515,11 +520,10 @@ async function handleQuizPollReaction(reaction, client) {
   if (!q || q.status !== 'active') return;
 
   // Verificar que la reacción es sobre el mensaje del quiz
-  const reactedMsgId = reaction.message.id?._serialized;
-  console.log(`🧠 Debug: reactedMsgId=${reactedMsgId}, quizMessageId=${q.quizMessageId}`);
+  console.log(`🧠 Debug: reactedMsgId=${rawId}, quizMessageId=${q.quizMessageId}`);
   
   // Si hay un quizMessageId definido, verificar que coincide
-  if (q.quizMessageId && reactedMsgId && reactedMsgId !== q.quizMessageId) {
+  if (q.quizMessageId && rawId && rawId !== q.quizMessageId) {
     console.log(`🧠 Skip: Mensaje no coincide con quiz`);
     return;
   }
@@ -532,7 +536,6 @@ async function handleQuizPollReaction(reaction, client) {
 
 module.exports = {
   handleQuizCommand,
-  processQuizAnswer,
   handleQuizPollReaction,
   getActiveQuiz,
   createRandomQuiz,

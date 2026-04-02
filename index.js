@@ -7,7 +7,6 @@ const cron = require("node-cron");
 const db = require("./database");
 const { handleCommand, handlePollReaction, launchGame, handleQuizPollReaction, handleBetReaction, handleQuizCommand } = require("./commands");
 const { handleQuizPollVote } = require("./quizzes.js");
-const { processQuizAnswer } = require("./quizzes-new");
 
 // ─── CONFIGURACIÓN ────────────────────────────────────────────────────────────
 const GAME_SCHEDULE = process.env.GAME_SCHEDULE || "20:00";
@@ -153,7 +152,7 @@ client.on("ready", async () => {
 function normalizeEmoji(e) { return e.replace(/\uFE0F/g, ''); }
 
 const ALLOWED_RAW    = ['👍','👍🏻','👍🏼','👍🏽','👍🏾','👍🏿'];
-const ALLOWED_DIGITS = ['1️⃣','2️⃣','3️⃣','4️⃣']; // ya normalizados (sin FE0F)
+const ALLOWED_DIGITS = ['1\u20E3','2\u20E3','3\u20E3','4\u20E3'];
 
 client.on("message_reaction", async (reaction) => {
   if (!reaction.reaction || reaction.reaction.trim() === '') return;
@@ -209,10 +208,6 @@ async function processMessage(message) {
 
   const body = message.body?.trim() || "";
 
-  // 3. Si no empieza con "/" y no es una letra suelta (A,B,C,D), lo descartamos
-  const isQuizAnswer = /^[ABCD]$/i.test(body);
-  if (!body.startsWith("/") && !isQuizAnswer) return;
-
   // 4. Chequeo de tamaño
   if (body.length > 450) return;
 
@@ -232,11 +227,11 @@ async function processMessage(message) {
   try {
     const lowerBody = body.toLowerCase();
     
-    // 6. Validamos que sea un comando conocido (Si no es una respuesta de quiz)
-    if (!isQuizAnswer) {
-      const validCommands = ["/casino", "/letitride", "/bet", "/balance", "/top", "/history", "/stop", "/admin", "/spin", "/quiz"];
-      if (!validCommands.some(cmd => lowerBody.startsWith(cmd))) return;
-    }
+    if (!body.startsWith("/")) return;
+
+    // 6. Validamos que sea un comando conocido
+    const validCommands = ["/casino", "/letitride", "/bet", "/balance", "/top", "/history", "/stop", "/admin", "/spin", "/quiz"];
+    if (!validCommands.some(cmd => body.toLowerCase().startsWith(cmd))) return;
 
     db.updateGroupActivity(from); 
 
@@ -247,12 +242,6 @@ async function processMessage(message) {
     if (lowerBody.startsWith("/quiz")) {
       await handleQuizCommand(message, client);
       return;
-    }
-
-    // Procesar respuestas de quiz (A, B, C, D)
-    if (isQuizAnswer) {
-      const processed = await processQuizAnswer(message, client);
-      if (processed) return; // Si era respuesta válida de quiz, cortamos acá
     }
 
     // Procesar el resto de los comandos normales (/bet, /balance, etc)
