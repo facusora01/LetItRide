@@ -6,7 +6,6 @@ const qrcode = require("qrcode-terminal");
 const cron = require("node-cron");
 const db = require("./database");
 const { handleCommand, handlePollReaction, launchGame, handleQuizPollReaction, handleBetReaction, handleQuizCommand } = require("./commands");
-const { handleQuizPollVote } = require("./quizzes.js");
 
 // ─── CONFIGURACIÓN ────────────────────────────────────────────────────────────
 const GAME_SCHEDULE = process.env.GAME_SCHEDULE || "20:00";
@@ -158,36 +157,37 @@ client.on("message_reaction", async (reaction) => {
   if (!reaction.reaction || reaction.reaction.trim() === '') return;
 
   const emoji    = reaction.reaction;
-  const emojiN   = normalizeEmoji(emoji);          // normalizar para comparar
+  const emojiN   = normalizeEmoji(emoji);          
   const isThumb  = ALLOWED_RAW.includes(emojiN);
   const isDigit  = ALLOWED_DIGITS.includes(emojiN);
 
   if (!isThumb && !isDigit) return;
 
-  const sender = reaction.senderId || "Dueño/Bot";
-  console.log(`🔔 REACTION EVENT 🔥 | Emoji: ${emoji} (norm: ${emojiN}) | De: ${sender}`);
+  const cleanSenderId = (reaction.senderId || "").replace(/:\d+(@|$)/, "$1") || reaction.senderId;
+
+  // Intentamos extraer los IDs (con la esperanza de que la librería algún día los mande bien)
+  let rawMsgId = reaction.msgId?._serialized || reaction.msgId?.id || reaction.id?._serialized || "";
+  let groupIdFromMsg = reaction.msgId?.remote || reaction.id?.remote || reaction._data?.key?.remoteJid || "";
+
+  if (!groupIdFromMsg && typeof rawMsgId === "string") {
+    groupIdFromMsg = rawMsgId.split("_").find(p => p.includes("@g.us")) || "";
+  }
+
+  const normalizedReaction = {
+    msgId: { _serialized: rawMsgId }, 
+    rawMsgId: rawMsgId,               
+    reaction:  emojiN,
+    senderId:  cleanSenderId,
+    groupId:   groupIdFromMsg
+  };
 
   try {
-    // Procesar solo reacciones de thumbs para votaciones de casino
-    if (isThumb) await handlePollReaction(reaction, client);
-    
-    // Procesar solo reacciones de dígitos para quizzes
-    if (isDigit) await handleQuizPollReaction(reaction, client);
+    if (isThumb) await handlePollReaction(normalizedReaction, client);
+    if (isDigit) await handleQuizPollReaction(normalizedReaction, client);
   } catch (err) {
     console.error("❌ Error en message_reaction:", err.message);
   }
 });
-
-// ─── VOTOS DE POLL (quiz y votaciones nativas de WhatsApp) ────────────────────
-client.on("message_create", async (msg) => {
-  if (msg.type !== "poll_vote") return;
-  try {
-    await handleQuizPollVote(msg, client);
-  } catch (err) {
-    console.error("❌ Error en poll_vote:", err.message);
-  }
-});
-
 
 let isSynced = false; 
 const processedMessages = new Set(); // Memoria a corto plazo para evitar duplicados

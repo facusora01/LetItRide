@@ -483,54 +483,61 @@ async function processQuizAnswer(message, client) {
   return success;
 }
 
-// Mapeo de emoji normalizado → índice de opción
-const DIGIT_TO_INDEX = { '1⃣': 0, '2⃣': 1, '3⃣': 2, '4⃣': 3 };
-
 async function handleQuizPollReaction(reaction, client) {
-  // Extraer ID del mensaje usando la misma lógica que handlePollReaction
-  const rawId = reaction.msgId?._serialized || reaction.msgId?.id || reaction.msgId || reaction.message?.id?._serialized || "";
-  const strId = typeof rawId === 'object' ? JSON.stringify(rawId) : String(rawId);
-  const parts = strId.split(/[_"]/);
-  const baseId = parts.find(p => p.length > 15 && /^[A-F0-9]+$/i.test(p)) || strId;
-  
-  if (!rawId) return;
+  console.log("\n=== 🕵️ INICIO REACCION QUIZ ===");
 
-  // Extraer groupId del mensaje de reacción
-  let from = reaction.message?.from;
-  
-  // Verificar que el ID contenga @g.us para asegurar que es un grupo
-  if (!from || !from.includes('@g.us')) {
-    // Si no tiene @g.us, intentar extraer del msgId
-    if (rawId && typeof rawId === 'string') {
-      const groupIdFromMsg = rawId.split('_').find(p => p.includes('@g.us'));
-      if (groupIdFromMsg) {
-        from = groupIdFromMsg;
-      }
+  let from = reaction.groupId || "";
+  const senderId = reaction.senderId || ""; 
+  const emojiN = reaction.reaction || "";
+
+  // 🚀 PROTOCOLO RADAR GLOBAL: Si la librería falla al enviar el ID del grupo, lo adivinamos
+  if (!from) {
+    console.log("⚠️ WWebJS ocultó el ID del grupo. Activando Radar Global...");
+    const activeGroups = Array.from(pendingQuizReactions.values());
+
+    if (activeGroups.length === 1) {
+      from = activeGroups[0].groupId;
+      console.log(`📡 ¡Grupo deducido exitosamente por radar!: ${from}`);
+    } else if (activeGroups.length > 1) {
+      console.log("❌ Hay múltiples quizzes activos en grupos distintos, imposible adivinar.");
+      return;
+    } else {
+      console.log("❌ No hay ningún quiz activo en memoria.");
+      return;
     }
   }
-  
-  const senderId = reaction.senderId;
-  const emojiN   = reaction.reaction.replace(/\uFE0F/g, '');
 
-  const idx = DIGIT_TO_INDEX[emojiN];
-  if (idx === undefined) return;
-
-  // Buscar quiz activo usando el sistema nuevo
-  const q = getActiveQuiz(from);
-  if (!q || q.status !== 'active') return;
-
-  // Verificar que la reacción es sobre el mensaje del quiz
-  console.log(`🧠 Debug: reactedMsgId=${rawId}, quizMessageId=${q.quizMessageId}`);
-  
-  // Si hay un quizMessageId definido, verificar que coincide
-  if (q.quizMessageId && rawId && rawId !== q.quizMessageId) {
-    console.log(`🧠 Skip: Mensaje no coincide con quiz`);
+  if (!senderId) {
+    console.log("❌ Falla Crítica: Sigue faltando el Sender ID.");
     return;
   }
 
-  const answerLetter = String.fromCharCode(65 + idx); // 0→A, 1→B, etc.
+  const match = emojiN.match(/\d/);
+  if (!match) return;
+
+  const numeroStr = match[0];
+  const idx = ['1', '2', '3', '4'].indexOf(numeroStr);
+  console.log(`2️⃣ Opción extraída: ${numeroStr} | Índice de opción: ${idx}`);
+
+  if (idx === -1) return;
+
+  const q = getActiveQuiz(from);
+  if (!q || q.status !== 'active') {
+    console.log("❌ El quiz ya no está activo en este grupo.");
+    return;
+  }
+
+  const answerLetter = String.fromCharCode(65 + idx);
+  console.log(`4️⃣ Registrando: Usuario ${senderId} -> Eligió ${answerLetter}`);
+
   const ok = submitAnswer(from, senderId, answerLetter);
-  if (ok) console.log(`🧠 Quiz respuesta: ${senderId} → ${answerLetter} (${emojiN})`);
+  
+  if (ok) {
+    console.log(`✅ ¡ÉXITO TOTAL! Respuesta guardada en memoria.`);
+  } else {
+    console.log(`⚠️ Respuesta ignorada (el usuario ya había votado o se acabó el tiempo).`);
+  }
+  console.log("====================================\n");
 }
 
 
