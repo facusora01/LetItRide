@@ -94,37 +94,46 @@ client.on("ready", async () => {
 
   // ─── LIMPIEZA AUTOMÁTICA (3 DÍAS DE INACTIVIDAD) ─────────────────────────
   cron.schedule("0 3 * * *", async () => {
-    console.log("🧹 Iniciando chequeo de inactividad...");
-    const inactiveGroups = db.getInactiveGroups(3); 
-    
-    for (const group of inactiveGroups) {
+  console.log("🧹 Iniciando chequeo de inactividad...");
+  
+  let inactiveGroups;
+  try {
+    inactiveGroups = db.getInactiveGroups(3);
+  } catch (err) {
+    console.error("❌ Error al obtener grupos inactivos:", err.message);
+    return; // salir limpiamente sin matar el bot
+  }
+
+  console.log(`🔍 Grupos inactivos encontrados: ${inactiveGroups.length}`);
+
+  for (const group of inactiveGroups) {
+    try {
+      // Primero marcar como inactivo en DB (esto no puede tirar el bot)
+      db.removeGroup(group.group_id);
+
+      // Intentar enviar mensaje y salir, pero sin morir si falla
       try {
-        const chat = await client.getChatById(group.group_id);
-        await client.sendMessage(group.group_id, 
+        await client.sendMessage(group.group_id,
           "👋 *Aviso de inactividad:*\n\n" +
           "Este casino se retira del grupo debido a que no hubo actividad en los últimos 3 días. " +
           "¡Vuelvan a invitarme cuando quieran jugar! 🎰"
         );
+        await new Promise(r => setTimeout(r, 2000)); // esperar antes de salir
+        const chat = await client.getChatById(group.group_id);
         await chat.leave();
-        db.removeGroup(group.group_id);
-        console.log(`🚪 Salida automática: ${group.group_name} por inactividad.`);
-      } catch (err) {
-        console.error(`❌ Error al salir del grupo ${group.group_id}:`, err.message);
+      } catch (leaveErr) {
+        // Si falla el leave/mensaje, no importa — ya está marcado inactivo en DB
+        console.warn(`⚠️ No se pudo salir de ${group.group_name}: ${leaveErr.message}`);
       }
-    }
-  }, { timezone: "America/Argentina/Buenos_Aires" });
 
-  // ─── RESETEO SEMANAL DE CRÉDITOS ─────────────────────────────────────────
-  cron.schedule(`0 0 * * ${CREDIT_DAY}`, () => {
-    console.log(`🔄 Reseteo semanal de créditos (${creditDayName})`);
-    db.getActiveGroups().forEach(group => {
-      db.resetWeeklyCredits(group.group_id);
-      client.sendMessage(group.group_id,
-        `💰 *¡Créditos recargados!*\n\n` +
-        `Todos los jugadores recibieron sus créditos del ${creditDayName}.\n\n` +
-        `🎰 ¡Que comiencen los juegos! 🍀`
-      );
-    });
+      console.log(`🚪 Salida automática: ${group.group_name} por inactividad.`);
+      await new Promise(r => setTimeout(r, 3000)); // delay entre grupos
+    } catch (err) {
+      console.error(`❌ Error procesando grupo inactivo ${group.group_id}:`, err.message);
+    }
+  }
+
+  console.log("🧹 Chequeo de inactividad completado.");
   }, { timezone: "America/Argentina/Buenos_Aires" });
 
   // ─── JUEGO AUTOMÁTICO ────────────────────────────────────────────────────

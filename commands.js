@@ -150,7 +150,7 @@ const COMMAND_RULES = {
   "/casino":    [2, 5],
   "/letitride": [1, 1],
   "/bet":       [3, 52],
-  "/admin":     [1, 4],
+  "/admin":     [1, 2],
   "/spin":      [1, 1],
 };
 
