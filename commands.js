@@ -1,16 +1,9 @@
 const db = require("./database");
 const { DEFAULT_WEEKLY_CREDITS } = db;
 const { exec } = require("child_process");
-const { MessageMedia, Poll } = require("whatsapp-web.js");
+const { MessageMedia } = require("whatsapp-web.js");
 const path = require("path");
 const fs = require("fs");
-const { 
-  handleQuizCommand,
-  handleQuizPollReaction,
-  getActiveQuiz,
-  finishQuiz,
-  QUIZ_PRIZES,
-} = require("./quizzes-new");
 
 const CREDIT_DAY = parseInt(process.env.CREDIT_DAY) || 5;
 const BET_DURATION = parseInt(process.env.BET_DURATION) || 4; // minutos de apuestas
@@ -311,18 +304,17 @@ async function executeConfirmedGive(pending, client) {
       `✅ *Regalo grupal enviado* 🎁\n\n` +
       `🎁 Diste ${formatCredits(giveAmount)} a *${targets.length} jugadores*.\n` +
       `💰 Total regalado: ${formatCredits(totalCost)}\n` +
-      `💳 Saldo restante: ${formatCredits(newSenderBalance)}`
+      `💳 Tu nuevo saldo: ${formatCredits(newSenderBalance)}`
     );
   }
 }
 
 async function handlePollReaction(reaction, client) {
   try {
-    // ── ID simple, como siempre funcionó ──
     const msgId = reaction.msgId?._serialized;
     if (!msgId) return;
 
-    // ── 1. Confirmación de apuestas ajustadas ──
+    // ── 1. Confirmación de apuestas ajustadas por reacción ──
     if (pendingBetReactions.has(msgId)) {
       const betInfo = pendingBetReactions.get(msgId);
       if (reaction.senderId === betInfo.userId && THUMB_UP_VARIATIONS.includes(reaction.reaction)) {
@@ -330,7 +322,7 @@ async function handlePollReaction(reaction, client) {
         pendingBetReactions.delete(msgId);
         await executeConfirmedBet(betInfo, client);
       }
-      return;
+      return; // Detenemos la ejecución si era de apuestas
     }
 
     // ── 2. Confirmación de transferencias / regalos ──
@@ -341,25 +333,29 @@ async function handlePollReaction(reaction, client) {
         pendingConfirmations.delete(msgId);
         await executeConfirmedGive(pending, client);
       }
-      return;
+      return; // Detenemos la ejecución
     }
 
-    // ── 3. Votación de inicio de partida ──
+    // ── 3. Votación de inicio de partida (/casino start) ──
     for (const [groupId, poll] of pendingPolls.entries()) {
       if (poll.msgId !== msgId) continue;
       const voterId = reaction.senderId;
       if (!voterId) break;
+      
       if (THUMB_UP_VARIATIONS.includes(reaction.reaction)) {
         if (reaction.read === false) {
           poll.yesVoters.add(voterId);
           console.log(`🗳️ Voto SÍ en ${groupId}: ${poll.yesVoters.size}/${poll.needed}`);
         } else {
           poll.yesVoters.delete(voterId);
+          console.log(`🗳️ Voto retirado en ${groupId}: ${poll.yesVoters.size}/${poll.needed}`);
         }
       }
+
       if (poll.yesVoters.size >= poll.needed) {
         clearTimeout(poll.timeoutId);
         pendingPolls.delete(groupId);
+        console.log(`✅ Umbral alcanzado en ${groupId} — lanzando juego`);
         await client.sendMessage(groupId,
           `✅ *¡Votación aprobada!* ${poll.yesVoters.size}/${poll.needed} votos 🎉\n¡La partida arranca ya!`
         );
@@ -520,6 +516,10 @@ async function handleCommand(message, client) {
     const parts = body.split(/\s+/);
     const command = parts[0]?.toLowerCase();
     const subcommand = (parts[1] || "").toLowerCase();
+
+    if (group && group.active) {
+        db.updateGroupActivity(groupId);
+    }
 
     if (!validateCommand(parts))
       return message.reply('❌ Comando mal escrito. Usá `/casino help` para ver el uso correcto.');
@@ -1286,13 +1286,4 @@ async function handleBetReaction(reaction, client) {
   }
 }
 
-
-
-module.exports = { 
-  handleCommand, 
-  handlePollReaction, 
-  handleBetReaction, 
-  launchGame,
-  handleQuizCommand,
-  handleQuizPollReaction
-};
+module.exports = { handleCommand, handlePollReaction, handleBetReaction, launchGame };

@@ -6,7 +6,6 @@ node_modules/
 
 # Sesión de WhatsApp y Caché
 bot_session/
-casino_session/
 .wwebjs_cache/
 .wwebjs_auth/
 
@@ -14,5 +13,3 @@ casino_session/
 *.db
 *.sqlite
 *.sqlite3
-*.db-shm
-*.db-wal

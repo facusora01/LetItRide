@@ -104,20 +104,6 @@ db.exec(`
     created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (group_id) REFERENCES groups(group_id)
   );
-
-  CREATE TABLE IF NOT EXISTS quiz_history (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    group_id     TEXT NOT NULL,
-    quiz_id      TEXT NOT NULL,
-    difficulty   TEXT NOT NULL,
-    question     TEXT NOT NULL,
-    correct_answer TEXT NOT NULL,
-    total_participants INTEGER DEFAULT 0,
-    total_winners INTEGER DEFAULT 0,
-    prize_pool   INTEGER DEFAULT 0,
-    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (group_id) REFERENCES groups(group_id)
-  );
 `);
 
 // ─── MIGRACIONES AUTOMÁTICAS ──────────────────────────────────────────────────
@@ -221,7 +207,7 @@ function updateGroupSettings(groupId, settings) {
     settings.weekly_credits || DEFAULT_WEEKLY_CREDITS,
     settings.game_schedule || '20:00',
     settings.game_days || '1,3,5',
-    settings.min_bet || 100,
+    settings.min_bet || 10,
     settings.max_bet || 500,
     settings.auto_payout !== undefined ? settings.auto_payout : 1,
     groupId
@@ -352,7 +338,7 @@ function getTopUsers(groupId, limit = 10) {
   `).all(groupId, limit);
 }
 
-// FIX BUG #3: Nueva función para evitar llamar db.prepare() desde commands.js e index.js
+// ✅ FIX BUG #3: Nueva función para evitar llamar db.prepare() desde commands.js e index.js
 function getUserCount(groupId) {
   return db.prepare(`SELECT COUNT(*) as count FROM users WHERE group_id = ?`).get(groupId).count;
 }
@@ -419,7 +405,7 @@ function placeBet(gameId, userId, betType, betValue, amount) {
   return db.prepare(`SELECT * FROM bets WHERE id = ?`).get(result.lastInsertRowid);
 }
 
-// FIX BUG #4: JOIN — ahora filtra por group_id para no mezclar jugadores entre grupos
+// ✅ FIX BUG #4: JOIN corregido — ahora filtra por group_id para no mezclar jugadores entre grupos
 function getGameBets(gameId) {
   return db.prepare(`
     SELECT b.*, u.username 
@@ -439,7 +425,7 @@ function getUserBets(userId, gameId) {
   `).all(gameId, userId);
 }
 
-// FIX BUG #5: Nueva función para no llamar db.prepare() desde commands.js e index.js
+// ✅ FIX BUG #5: Nueva función para no llamar db.prepare() desde commands.js e index.js
 function updateBetStatus(betId, payout, status) {
   db.prepare(`UPDATE bets SET payout = ?, status = ? WHERE id = ?`).run(payout, status, betId);
 }
@@ -615,37 +601,6 @@ function getRecentGames(limit = 10) {
   }));
 }
 
-// ─── QUIZZES ───────────────────────────────────────────────────────────────────
-function saveQuizHistory(groupId, quizId, difficulty, question, correctAnswer, participants, winners, prizePool) {
-  const stmt = db.prepare(`
-    INSERT INTO quiz_history (group_id, quiz_id, difficulty, question, correct_answer, total_participants, total_winners, prize_pool)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  return stmt.run(groupId, quizId, difficulty, question, correctAnswer, participants, winners, prizePool);
-}
-
-function getQuizHistory(groupId, limit = 10) {
-  return db.prepare(`
-    SELECT * FROM quiz_history 
-    WHERE group_id = ? 
-    ORDER BY created_at DESC 
-    LIMIT ?
-  `).all(groupId, limit);
-}
-
-function getQuizStats(groupId) {
-  return db.prepare(`
-    SELECT 
-      COUNT(*) as total_quizzes,
-      SUM(total_participants) as total_participants,
-      SUM(total_winners) as total_winners,
-      SUM(prize_pool) as total_prizes_given,
-      AVG(total_winners * 1.0 / total_participants) as avg_win_rate
-    FROM quiz_history 
-    WHERE group_id = ?
-  `).get(groupId);
-}
-
 module.exports = {
   addGroup,
   removeGroup,
@@ -685,8 +640,5 @@ module.exports = {
   getTopCreditsGlobal,
   getTopWinnersGlobal,
   getRecentGames,
-  saveQuizHistory,
-  getQuizHistory,
-  getQuizStats,
   DEFAULT_WEEKLY_CREDITS,
 };

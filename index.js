@@ -5,7 +5,7 @@ const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
 const cron = require("node-cron");
 const db = require("./database");
-const { handleCommand, handlePollReaction, launchGame, handleQuizPollReaction, handleBetReaction, handleQuizCommand } = require("./commands");
+const { handleCommand, handlePollReaction, handleBetReaction, launchGame } = require("./commands");
 
 // ─── CONFIGURACIÓN ────────────────────────────────────────────────────────────
 const GAME_SCHEDULE = process.env.GAME_SCHEDULE || "20:00";
@@ -16,41 +16,37 @@ const CREDIT_DAY = parseInt(process.env.CREDIT_DAY) || 5;
 const DAY_NAMES = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
 const creditDayName = DAY_NAMES[CREDIT_DAY];
 
-// Quizzes: solo activación manual por /quiz start (superadmin)
-console.log("🧠 Quizzes: modo manual activado");
-
 // ─── CLIENTE WHATSAPP ─────────────────────────────────────────────────────────
 const client = new Client({
   authStrategy: new LocalAuth({
     clientId: "letitride-casino-bot",
     dataPath: "./casino_session"
   }),
-  webVersionCache: {
-    type: 'remote',
-    remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
-  },
   puppeteer: {
-    headless: "new", // Usar el nuevo modo headless de Chrome
+    headless: true,
     executablePath: process.env.CHROMIUM_PATH || undefined,
-    browser: process.env.BROWSER_TYPE || "chrome",
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-gpu",
-      "--disable-web-security",
-      "--disable-features=VizDisplayCompositor",
+
+      "--disable-dev-shm-usage",       // Usa /tmp en lugar de memoria compartida
+      "--js-flags='--max-old-space-size=256'", // Limita el motor V8 para no comerse la RAM
+      "--single-process",              // Corre todo en un solo hilo (ahorra CPU y RAM)
+      "--no-zygote",                   // Evita procesos hijos pesados
+
+      "--disable-accelerated-2d-canvas",
+      "--disable-gpu",                 // No hay placa de video, no gastemos ciclos acá
+      "--disable-extensions",          // Evita cargar plugins innecesarios
+      "--disable-notifications",       // Evita alertas externas
+      "--no-first-run",                // Salta configuraciones iniciales de Chrome
+
       "--disable-background-timer-throttling",
       "--disable-backgrounding-occluded-windows",
       "--disable-renderer-backgrounding",
-      "--disable-background-networking",
-      "--disk-cache-size=0", // Evita que Chrome sature el disco de tu VPS
-      "--no-first-run",
-      "--no-default-browser-check",
-      "--disable-default-apps"
-    ],
-    defaultViewport: null,
-    timeout: 60000, // 60 segundos timeout
+      
+      "--proxy-server='direct://'",
+      "--proxy-bypass-list=*"
+],
   },
 });
 
@@ -69,8 +65,21 @@ client.on("authenticated", () => console.log("✅ Autenticado correctamente."));
 client.on("auth_failure", (msg) => console.error("❌ Error de autenticación:", msg));
 
 client.on("ready", async () => {
-  // Se eliminó la optimización de recursos (setRequestInterception) 
-  // porque generaba mucha latencia en la lectura de los mensajes.
+  try {
+    const page = client.pupPage;
+    await page.setRequestInterception(true);
+    page.on('request', (request) => {
+      const type = request.resourceType();
+      if (['image', 'stylesheet', 'font', 'media'].includes(type)) {
+        request.abort();
+      } else {
+        request.continue();
+      }
+    });
+    console.log("⚡ Optimización de recursos activa: Imágenes y Estilos bloqueados.");
+  } catch (e) {
+    console.error("⚠️ No se pudo activar la optimización de Puppeteer:", e.message);
+  }
 
   console.log("🎰 LetItRide Casino Bot listo y conectado a WhatsApp!\n");
 
@@ -141,147 +150,72 @@ client.on("ready", async () => {
       }
     }
   }, { timezone: "America/Argentina/Buenos_Aires" });
-
-  // Los quizzes se activan SOLO por comando /quiz start (superadmin)
-  console.log("🧠 Quizzes: activación manual únicamente (/quiz start)");
 });
 
-// ─── NORMALIZACIÓN DE EMOJIS ──────────────────────────────────────────────────
-// WhatsApp envía emojis numéricos con o sin el selector de variación U+FE0F
-function normalizeEmoji(e) { return e.replace(/\uFE0F/g, ''); }
-
-const ALLOWED_RAW    = ['👍','👍🏻','👍🏼','👍🏽','👍🏾','👍🏿'];
-const ALLOWED_DIGITS = ['1\u20E3','2\u20E3','3\u20E3','4\u20E3'];
-
+// ─── LISTENER DE REACCIONES (para el poll de /casino start) ──────────────────
 client.on("message_reaction", async (reaction) => {
-  if (!reaction.reaction || reaction.reaction.trim() === '') return;
-
-  const emoji    = reaction.reaction;
-  const emojiN   = normalizeEmoji(emoji);          
-  const isThumb  = ALLOWED_RAW.includes(emojiN);
-  const isDigit  = ALLOWED_DIGITS.includes(emojiN);
-
-  if (!isThumb && !isDigit) return;
-
-  const cleanSenderId = (reaction.senderId || "").replace(/:\d+(@|$)/, "$1") || reaction.senderId;
-
-  // Intentamos extraer los IDs (con la esperanza de que la librería algún día los mande bien)
-  let rawMsgId = reaction.msgId?._serialized || reaction.msgId?.id || reaction.id?._serialized || "";
-  let groupIdFromMsg = reaction.msgId?.remote || reaction.id?.remote || reaction._data?.key?.remoteJid || "";
-
-  if (!groupIdFromMsg && typeof rawMsgId === "string") {
-    groupIdFromMsg = rawMsgId.split("_").find(p => p.includes("@g.us")) || "";
-  }
-
-  const normalizedReaction = {
-    msgId: { _serialized: rawMsgId }, 
-    rawMsgId: rawMsgId,               
-    reaction:  emojiN,
-    senderId:  cleanSenderId,
-    groupId:   groupIdFromMsg
-  };
-
   try {
-    if (isThumb) await handlePollReaction(normalizedReaction, client);
-    if (isDigit) await handleQuizPollReaction(normalizedReaction, client);
+    // 1. Procesa votaciones de inicio (/casino start)
+    await handlePollReaction(reaction, client);
+    
+    // 2. Procesa confirmaciones de apuestas y regalos
+    const reactorId = reaction.senderId; 
+    await handleBetReaction(client, reaction, reactorId); 
   } catch (err) {
     console.error("❌ Error en message_reaction:", err.message);
   }
 });
 
-let isSynced = false; 
-const processedMessages = new Set(); // Memoria a corto plazo para evitar duplicados
 
+let isSynced = false; 
 // ───── HANDLER DE MENSAJES ─────────────────────
 async function processMessage(message) {
-  // 1. Filtro de mensajes antiguos (Backlog)
+  // Filtro de mensajes antiguos (Backlog)
   if (message.timestamp < startupTime) return;
 
-  // 2. (Bloquea lecturas repetidas del mismo mensaje)
-  const msgId = message.id?._serialized;
-  if (msgId) {
-    if (processedMessages.has(msgId)) return; // Si ya lo leímos, chau
-    processedMessages.add(msgId);
-    // Borramos el ID de la memoria después de 30 segundos para no gastar RAM
-    setTimeout(() => processedMessages.delete(msgId), 30000);
-  }
-
-  const body = message.body?.trim() || "";
-
-  // 4. Chequeo de tamaño
-  if (body.length > 450) return;
-
-  // 4. Identificamos de dónde viene y filtramos si no es de un grupo
-  const from = message.fromMe ? message.to : message.from;
-  if (!from.endsWith("@g.us") && !from.endsWith("@lid")) return;
-
-  // 5. Recién ahora marcamos que el sistema está sincronizado (Solo se activa con el primer comando válido)
   if (!isSynced) {
     isSynced = true;
     console.log("\n" + "=".repeat(45));
     console.log("🚀 SISTEMA SINCRONIZADO: Leyendo chat en tiempo real");
-    console.log(`📥 Primer mensaje útil recibido: "${body.slice(0, 20)}..."`);
+    console.log(`📥 Primer mensaje recibido: "${message.body?.slice(0, 20)}..."`);
     console.log("=".repeat(45) + "\n");
   }
 
-  try {
-    const lowerBody = body.toLowerCase();
-    
-    if (!body.startsWith("/")) return;
+  const body = message.body?.trim() || "";
 
-    // 6. Validamos que sea un comando conocido
-    const validCommands = ["/casino", "/letitride", "/bet", "/balance", "/top", "/history", "/stop", "/admin", "/spin", "/quiz"];
-    if (!validCommands.some(cmd => body.toLowerCase().startsWith(cmd))) return;
+  if (!body.startsWith("/") || body.length > 450) return;
+
+  const from = message.fromMe ? message.to : message.from;
+
+  try {
+
+    if (!from.endsWith("@g.us") && !from.endsWith("@lid")) return;
+
+    const lowerBody = body.toLowerCase();
+    const validCommands = ["/casino", "/letitride", "/bet", "/balance", "/top", "/history", "/stop", "/admin", "/spin"];
+    if (!validCommands.some(cmd => lowerBody.startsWith(cmd))) return;
 
     db.updateGroupActivity(from); 
 
     const logBody = body.length > 100 ? body.slice(0, 100) + "..." : body;
     console.log(`\n🎰 [${new Date().toLocaleTimeString("es-AR")}] ${from}: "${logBody}"`);
 
-    // Procesar comandos de quiz primero
-    if (lowerBody.startsWith("/quiz")) {
-      await handleQuizCommand(message, client);
-      return;
-    }
-
-    // Procesar el resto de los comandos normales (/bet, /balance, etc)
     await handleCommand(message, client);
-    
   } catch (error) {
-    // Ignorar errores de Chrome/Puppeteer que son temporales
-    if (error.message.includes("Target closed") || 
-        error.message.includes("Protocol error") || 
-        error.message.includes("Session closed")) {
-      console.log("⚠️ Error temporal de Chrome/Puppeteer - ignorando");
-      return;
-    }
     console.error("❌ Error en processMessage:", error.message);
   }
 }
 
-client.on("message_create", async (msg) => {
-  processMessage(msg).catch(err => {
-    // Ignorar errores temporales de Chrome/Puppeteer
-    if (err.message.includes("Target closed") || 
-        err.message.includes("Protocol error") || 
-        err.message.includes("Session closed")) {
-      console.log("⚠️ Error temporal en message_create - ignorando");
-      return;
-    }
+client.on("message_create", (message) => {
+
+  processMessage(message).catch(err => {
     console.error("❌ Error asíncrono en processMessage:", err.message);
   });
 });
 
-// ─── MONITOREO DE SALUD DEL NAVEGADOR ───────────────────────────────────
 client.on("disconnected", (reason) => {
-    console.error("🚨 Bot desconectado del socket:", reason);
-
-    process.exit(1); 
-});
-
-client.pupPage?.on('error', (err) => {
-    console.error("🔥 Error crítico en la página de Puppeteer:", err.message);
-    process.exit(1); 
+  console.error("❌ Bot desconectado:", reason);
+  process.exit(1);
 });
 
 process.on('unhandledRejection', (reason) => {

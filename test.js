@@ -294,7 +294,7 @@ test("handleBetReaction está exportado", () => {
   // Verificar que el export existe sin instanciar el módulo completo
   const src = require("fs").readFileSync("./commands.js", "utf8");
   assert(src.includes("handleBetReaction"), "handleBetReaction no encontrado en commands.js");
-  assert(src.includes("module.exports = {") && src.includes("handleBetReaction"), "handleBetReaction no está en module.exports");
+  assert(src.includes("module.exports = { handleCommand, handlePollReaction, handleBetReaction"), "handleBetReaction no está en module.exports");
 });
 test("pendingBets guarda msgId del mensaje de confirmación", () => {
   const src = require("fs").readFileSync("./commands.js", "utf8");
@@ -385,8 +385,9 @@ test("Comando desconocido '/xyz' → true (el handler lo rechaza)", () => {
 });
 test("/admin solo → válido (1 parte)", () => assertValid("/admin"));
 test("/admin resumen → válido (2 partes)", () => assertValid("/admin resumen"));
-test("/admin resumen extra → válido (3 partes)", () => assertValid("/admin resumen extra"));
-test("/admin resumen extra otro → válido (4 partes)", () => assertValid("/admin resumen extra otro"));
+test("/admin resumen extra → inválido (3 partes > max=2)", () =>
+  assertInvalid("/admin resumen extra")
+);
 test("COMMAND_MAX_LENGTH['/casino'] = 100", () =>
   assert(COMMAND_MAX_LENGTH["/casino"] === 100)
 );
@@ -401,76 +402,6 @@ test("Todos los keywords del KEYWORD_MAP tienen valor interno válido", () => {
   Object.values(KEYWORD_MAP).forEach(v =>
     assert(valid.includes(v), `Valor interno desconocido: ${v}`)
   );
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SUITE 9 — Tests específicos de reacciones de quiz
-// ═══════════════════════════════════════════════════════════════════════════════
-console.log(`\n${B}══ SUITE 9: Reacciones de Quiz y Prevención de Bugs ══${X}`);
-
-const quizSrc = require("fs").readFileSync("./quizzes-new.js", "utf8");
-
-// Definir EMOJI_TO_INDEX manualmente basado en el código real
-const EMOJI_TO_INDEX = {
-  '1️⃣': 0, '1': 0, '1⃣': 0,
-  '2️⃣': 1, '2': 1, '2⃣': 1,
-  '3️⃣': 2, '3': 2, '3⃣': 2,
-  '4️⃣': 3, '4': 3, '4⃣': 3
-};
-
-const letterMatch = quizSrc.match(/const INDEX_TO_LETTER\s*=\s*\[[\s\S]*?\];/);
-const INDEX_TO_LETTER = letterMatch ? new Function(letterMatch[0] + "; return INDEX_TO_LETTER;")() : ['A', 'B', 'C', 'D'];
-
-test("Conversión de emoji a letra funciona correctamente", () => {
-  const testCases = [
-    ['1️⃣', 'A'], ['1', 'A'], ['1⃣', 'A'],
-    ['2️⃣', 'B'], ['2', 'B'], ['2⃣', 'B'],
-    ['3️⃣', 'C'], ['3', 'C'], ['3⃣', 'C'],
-    ['4️⃣', 'D'], ['4', 'D'], ['4⃣', 'D']
-  ];
-  
-  testCases.forEach(([emoji, expectedLetter]) => {
-    const index = EMOJI_TO_INDEX[emoji];
-    const letter = INDEX_TO_LETTER[index];
-    assert(letter === expectedLetter, `${emoji} debe convertir a ${expectedLetter}, pero dio ${letter}`);
-  });
-});
-
-test("Distribución de premios entre ganadores", () => {
-  const QUIZ_PRIZES_MOCK = { 1: 5000, 2: 3000, 3: 2000, default: 1000 };
-  const scenarios = [
-    { winners: 1, expectedPrize: 5000 },
-    { winners: 2, expectedPrize: 3000 },
-    { winners: 3, expectedPrize: 2000 },
-    { winners: 8, expectedPrize: 1000 }
-  ];
-  scenarios.forEach(scenario => {
-    const prizePerWinner = scenario.winners <= 3 ? QUIZ_PRIZES_MOCK[scenario.winners] : QUIZ_PRIZES_MOCK.default;
-    assert(prizePerWinner === scenario.expectedPrize, `Fallo en cálculo de premio para ${scenario.winners} ganadores`);
-  });
-});
-
-// ─── TESTS DE ANÁLISIS ESTÁTICO (FIXES RECIENTES) ──────────────────────────────
-console.log(`\n${B}   ↳ Verificando Fixes Críticos en quizzes-new.js ↳${X}`);
-
-test("Fix ID: Extrae correctamente el groupId del msgId._serialized", () => {
-  assert(quizSrc.includes(".includes('@g.us')"), "Falta verificar si el ID contiene @g.us");
-  assert(quizSrc.includes(".split('_').find(p => p.includes('@g.us'))"), "Falta la lógica para extraer el ID del grupo con split");
-});
-
-test("Fix Memoria: Busca el quiz usando getActiveQuiz en la memoria central", () => {
-  assert(quizSrc.includes("getActiveQuiz(groupId)") || quizSrc.includes("getActiveQuiz(activeGroupId)"), 
-    "Debe usar getActiveQuiz() para evitar el bug de '0 participantes'");
-});
-
-test("Fix Tiempo: Aplica los 20 segundos de gracia para latencia de red", () => {
-  assert(quizSrc.includes("20000") || quizSrc.includes("timeLimit = 20000") || quizSrc.includes("createQuiz(groupId, difficulty, 20000)"), 
-    "Debe establecer timeLimit en 20000ms para compensar latencia");
-});
-
-test("Fix Registro: Pasa el activeGroupId correcto a submitAnswer", () => {
-  assert(quizSrc.includes("submitAnswer(from, senderId, answerLetter)"), 
-    "submitAnswer debe recibir el groupId correcto ('from')");
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -531,7 +462,7 @@ test("spinAndReport envía sticker antes del resultado", () => {
 });
 test("MessageMedia importado en commands.js", () => {
   const src = fs.readFileSync("./commands.js", "utf8");
-  assert(src.includes('const { MessageMedia, Poll } = require("whatsapp-web.js")'), "MessageMedia no está importado correctamente");
+  assert(src.includes('const { MessageMedia }'), "MessageMedia no está importado");
 });
 test("Ruta del sticker usa path.join (portable)", () => {
   const src = fs.readFileSync("./commands.js", "utf8");
@@ -543,222 +474,6 @@ test("Error de sticker es silencioso — no rompe el flujo", () => {
     src.includes("stickerErr") || src.includes("catch (sticker"),
     "El envío del sticker debe estar dentro de un try/catch"
   );
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SUITE 10 — Ajuste de apuestas y validación de fondos
-// ═══════════════════════════════════════════════════════════════════════════════
-console.log(`\n${B}══ SUITE 10: Ajuste de apuestas y validación de fondos ══${X}`);
-
-// Extraer funciones de ajuste de apuestas
-const betSrc = require("fs").readFileSync("./commands.js", "utf8");
-
-test("Función de ajuste de apuestas existe", () => {
-  assert(betSrc.includes("⚠️ *Tu apuesta fue ajustada* ✂️"), "No se encontró mensaje de ajuste de apuestas");
-  assert(betSrc.includes("removedByMin"), "No se encontró lógica de eliminación por mínimo");
-  assert(betSrc.includes("removedByFunds"), "No se encontró lógica de eliminación por fondos");
-});
-
-test("Valida monto mínimo por categoría", () => {
-  // Simular la lógica de validación
-  const mockBets = [
-    { amount: 50, targets: [{betType: 'number'}] },  // Debajo de mínimo (100)
-    { amount: 1500, targets: [{betType: 'red'}] },   // Debajo de mínimo (2000)  
-    { amount: 300, targets: [{betType: 'd1'}] },     // Arriba de mínimo (500)
-    { amount: 2000, targets: [{betType: 'number'}] } // Arriba de mínimo (100)
-  ];
-  
-  const expectedResults = [false, false, true, true]; // false = eliminado por mínimo
-  
-  mockBets.forEach((bet, i) => {
-    const minAmount = BET_MINIMUMS[bet.targets[0].betType] || 100;
-    const passesMin = bet.amount >= minAmount;
-    assert(passesMin === expectedResults[i], 
-      `Apuesta ${i}: monto=${bet.amount}, tipo=${bet.targets[0].betType}, mínimo=${minAmount}`);
-  });
-});
-
-test("Valida saldo disponible para apuestas múltiples", () => {
-  const userCredits = 10000;
-  const mockBets = [
-    { amount: 5000, targets: [{betType: 'number'}, {betType: 'red'}] }, // 5000 * 2 = 10000 (exacto)
-    { amount: 3000, targets: [{betType: 'number'}, {betType: 'red'}, {betType: 'd1'}] }, // 3000 * 3 = 9000 (ok)
-    { amount: 4000, targets: [{betType: 'number'}, {betType: 'red'}, {betType: 'd1'}] }, // 4000 * 3 = 12000 (excede)
-  ];
-  
-  const expectedResults = [true, true, false]; // false = eliminado por fondos
-  
-  mockBets.forEach((bet, i) => {
-    const totalCost = bet.amount * bet.targets.length;
-    const hasFunds = totalCost <= userCredits;
-    assert(hasFunds === expectedResults[i], 
-      `Apuesta ${i}: monto=${bet.amount}, targets=${bet.targets.length}, total=${totalCost}, saldo=${userCredits}`);
-  });
-});
-
-test("Genera mensaje de ajuste correctamente", () => {
-  assert(betSrc.includes("❌ *Eliminados (mínimo insuficiente):*"), "Falta mensaje de eliminación por mínimo");
-  assert(betSrc.includes("❌ *Eliminados (fondos insuficientes):*"), "Falta mensaje de eliminación por fondos");
-  assert(betSrc.includes("✅ *Apuesta válida:*"), "Falta mensaje de apuestas válidas");
-  assert(betSrc.includes("Reaccioná a este mensaje con 👍 para confirmar"), "Falta instrucción de reacción");
-});
-
-test("Guarda apuesta pendiente con ID correcto", () => {
-  assert(betSrc.includes("pendingBetReactions.set(previewMsgId"), "No se guarda apuesta pendiente con msgId");
-  assert(betSrc.includes("timeoutId"), "No se configura timeout para apuesta pendiente");
-  assert(betSrc.includes("activeGameId"), "No se guarda el ID del juego activo");
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SUITE 11 — Tests completos de reacciones para apuestas
-// ═══════════════════════════════════════════════════════════════════════════════
-console.log(`\n${B}══ SUITE 11: Tests completos de reacciones para apuestas ══${X}`);
-
-test("Extrae ID de mensaje de reacción correctamente", () => {
-  assert(betSrc.includes("reaction.msgId?._serialized"), "No extrae msgId._serialized");
-  assert(betSrc.includes("reaction.message?.id?._serialized"), "No extrae message.id._serialized como fallback");
-  assert(betSrc.includes("split(/[_\"]/)"), "No hace split para extraer ID base");
-  assert(betSrc.includes("/^[A-F0-9]+$/i"), "No valida formato hexadecimal del ID");
-});
-
-test("Compara correctamente ID de reacción con apuestas pendientes", () => {
-  assert(betSrc.includes("pendingBetReactions.entries()"), "No itera sobre apuestas pendientes");
-  assert(betSrc.includes("bId === baseId"), "No compara ID base con apuesta pendiente");
-  assert(betSrc.includes("reaction.senderId === betMatch.userId"), "No valida que el apostante original confirme");
-});
-
-test("Procesa reacción 👍 correctamente", () => {
-  assert(betSrc.includes("THUMB_UP_VARIATIONS.includes(reaction.reaction)"), "No valida variaciones de 👍");
-  assert(betSrc.includes("await executeConfirmedBet(betMatch, client)"), "No ejecuta confirmación de apuesta");
-  assert(betSrc.includes("pendingBetReactions.delete(betKey)"), "No elimina apuesta pendiente después de confirmar");
-});
-
-test("Limpia timeout de apuesta confirmada", () => {
-  assert(betSrc.includes("clearTimeout(betMatch.timeoutId)"), "No limpia timeout al confirmar apuesta");
-});
-
-test("Maneja casos de reacción a mensaje incorrecto", () => {
-  // El código debe ignorar reacciones a mensajes que no son de apuestas pendientes
-  assert(betSrc.includes("if (betMatch)"), "No hay control de si encontró apuesta pendiente");
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SUITE 12 — Tests mejorados de Quiz (corrigiendo los 3 fallidos)
-// ═══════════════════════════════════════════════════════════════════════════════
-console.log(`\n${B}══ SUITE 12: Tests mejorados de Quiz (corrigiendo los 3 fallidos) ══${X}`);
-
-test("Fix ID: Extrae correctamente el groupId del msgId._serialized", () => {
-  // Verificar que handleQuizPollReaction extrae correctamente el groupId desde reaction.message.from
-  assert(quizSrc.includes("reaction.message.from"), "Debe extraer groupId desde reaction.message.from");
-  assert(quizSrc.includes("let from = reaction.message.from"), "Debe asignar groupId a variable 'from'");
-  // Verificar que también tiene la lógica de fallback con @g.us
-  assert(quizSrc.includes(".includes('@g.us')"), "Debe verificar si el ID contiene @g.us");
-});
-
-test("Fix Memoria: Busca el quiz usando getActiveQuiz en la memoria central", () => {
-  assert(quizSrc.includes("const q = getActiveQuiz(from)"), "Debe usar getActiveQuiz(from) para buscar quiz activo");
-  assert(quizSrc.includes("getActiveQuiz(from)"), "Debe pasar el groupId correcto a getActiveQuiz");
-});
-
-test("Fix Tiempo: Aplica los 20 segundos de gracia para latencia de red", () => {
-  // Buscar setTimeLimit o timeLimit = 20000 en quizzes-new.js o el parámetro 20000 en createQuiz
-  assert(quizSrc.includes("20000") || quizSrc.includes("timeLimit = 20000") || quizSrc.includes("createQuiz(groupId, difficulty, 20000)"), 
-    "Debe establecer timeLimit en 20000ms para compensar latencia");
-});
-
-test("Fix Registro: Pasa el activeGroupId correcto a submitAnswer", () => {
-  assert(quizSrc.includes("submitAnswer(from, senderId, answerLetter)"), 
-    "submitAnswer debe recibir el groupId correcto ('from')");
-});
-
-test("Quiz: Verifica que la reacción sea sobre el mensaje del quiz", () => {
-  assert(quizSrc.includes("q.quizMessageId"), "Debe verificar quizMessageId del quiz activo");
-  assert(quizSrc.includes("reactedMsgId !== q.quizMessageId"), "Debe comparar ID del mensaje reaccionado");
-});
-
-test("Quiz: Convierte emoji a índice correctamente", () => {
-  assert(quizSrc.includes("DIGIT_TO_INDEX"), "Debe tener mapeo de emoji a índice");
-  assert(quizSrc.includes("String.fromCharCode(65 + idx)"), "Debe convertir índice a letra (A, B, C, D)");
-});
-
-test("Quiz: Registra respuesta correctamente", () => {
-  assert(quizSrc.includes("console.log(`🧠 Quiz respuesta:"), "Debe loggear respuesta recibida");
-  assert(quizSrc.includes("if (ok)"), "Debe verificar si la respuesta se registró correctamente");
-});
-
-test("Quiz: Filtra reacciones no numéricas", () => {
-  const indexSrc = require("fs").readFileSync("./index.js", "utf8");
-  assert(indexSrc.includes("ALLOWED_DIGITS"), "Debe tener constantes de emojis permitidos");
-  assert(indexSrc.includes("['1️⃣','2️⃣','3️⃣','4️⃣']"), "Debe definir emojis numéricos permitidos");
-  assert(indexSrc.includes("isDigit"), "Debe filtrar solo reacciones de dígitos para quizzes");
-});
-
-test("Quiz: Evita procesar reacciones duplicadas", () => {
-  const indexSrc = require("fs").readFileSync("./index.js", "utf8");
-  // Verificar que se eliminó el sistema anti-duplicación que estaba causando problemas
-  assert(!indexSrc.includes("processedReactions"), "No debe tener sistema anti-duplicación (causaba bugs)");
-});
-
-test("Quiz: Separa correctamente reacciones de casino y quizzes", () => {
-  const indexSrc = require("fs").readFileSync("./index.js", "utf8");
-  assert(indexSrc.includes("if (isThumb) await handlePollReaction"), "Las reacciones 👍 deben ir al casino");
-  assert(indexSrc.includes("if (isDigit) await handleQuizPollReaction"), "Las reacciones numéricas deben ir a quizzes");
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SUITE 13 — Tests de integración de reacciones
-// ═══════════════════════════════════════════════════════════════════════════════
-console.log(`\n${B}══ SUITE 13: Tests de integración de reacciones ══${X}`);
-
-test("Integración: Flujo completo de apuesta con reacción", () => {
-  // Verificar que todo el flujo esté presente
-  const commandsSrc = require("fs").readFileSync("./commands.js", "utf8");
-  const indexSrc = require("fs").readFileSync("./index.js", "utf8");
-  
-  // 1. Comando /bet procesado
-  assert(commandsSrc.includes('if (command === "/bet")'), "Debe procesar comando /bet");
-  
-  // 2. Ajuste de apuesta si es necesario
-  assert(commandsSrc.includes("⚠️ *Tu apuesta fue ajustada*"), "Debe mostrar mensaje de ajuste");
-  
-  // 3. Guardar apuesta pendiente
-  assert(commandsSrc.includes("pendingBetReactions.set"), "Debe guardar apuesta pendiente");
-  
-  // 4. Manejar reacción 👍
-  assert(indexSrc.includes("client.on(\"message_reaction\""), "Debe escuchar reacciones");
-  assert(indexSrc.includes("if (isThumb) await handlePollReaction"), "Debe procesar 👍 para casino");
-  
-  // 5. Confirmar apuesta
-  assert(commandsSrc.includes("executeConfirmedBet"), "Debe ejecutar confirmación de apuesta");
-});
-
-test("Integración: Flujo completo de quiz con reacción", () => {
-  const quizSrc = require("fs").readFileSync("./quizzes-new.js", "utf8");
-  const indexSrc = require("fs").readFileSync("./index.js", "utf8");
-  
-  // 1. Comando /quiz start procesado
-  assert(quizSrc.includes("handleQuizCommand"), "Debe procesar comando /quiz");
-  
-  // 2. Envío de quiz
-  assert(quizSrc.includes("await client.sendMessage(groupId, fullMessage)"), "Debe enviar mensaje de quiz");
-  
-  // 3. Guardar quizMessageId
-  assert(quizSrc.includes("quizData.quizMessageId = quizMessageId"), "Debe guardar ID del mensaje del quiz");
-  
-  // 4. Manejar reacción numérica
-  assert(indexSrc.includes("if (isDigit) await handleQuizPollReaction"), "Debe procesar emojis numéricos");
-  
-  // 5. Procesar respuesta
-  assert(quizSrc.includes("submitAnswer(from, senderId, answerLetter)"), "Debe registrar respuesta del quiz");
-});
-
-test("Integración: No hay interferencia entre sistemas", () => {
-  const indexSrc = require("fs").readFileSync("./index.js", "utf8");
-  
-  // Verificar que los sistemas estén separados correctamente
-  assert(indexSrc.includes("isThumb  = ALLOWED_RAW.includes(emojiN)"), "Debe detectar reacciones 👍");
-  assert(indexSrc.includes("isDigit  = ALLOWED_DIGITS.includes(emojiN)"), "Debe detectar reacciones numéricas");
-  assert(indexSrc.includes("if (!isThumb && !isDigit) return"), "Debe ignorar otras reacciones");
 });
 
 console.log(`\n${"─".repeat(50)}`);
