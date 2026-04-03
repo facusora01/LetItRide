@@ -69,11 +69,15 @@ client.on("ready", async () => {
     const page = client.pupPage;
     await page.setRequestInterception(true);
     page.on('request', (request) => {
+      // 1. Verificar si la petición ya fue manejada por otro proceso
+      if (request.isInterceptResolutionHandled()) return;
+
       const type = request.resourceType();
       if (['image', 'stylesheet', 'font', 'media'].includes(type)) {
-        request.abort();
+        // 2. Agregar .catch() para evitar que crashee si la red cambia muy rápido
+        request.abort().catch(() => {});
       } else {
-        request.continue();
+        request.continue().catch(() => {});
       }
     });
     console.log("⚡ Optimización de recursos activa: Imágenes y Estilos bloqueados.");
