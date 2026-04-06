@@ -1,5 +1,3 @@
-const startupTime = Math.floor(Date.now() / 1000);
-
 require("dotenv").config();
 const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
@@ -24,14 +22,14 @@ const client = new Client({
   }),
   puppeteer: {
     headless: true,
-    executablePath: process.env.CHROMIUM_PATH || undefined,
+    executablePath: process.env.CHROMIUM_PATH || "/usr/bin/chromium",
+    protocolTimeout: 60000,
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
 
       "--disable-dev-shm-usage",       // Usa /tmp en lugar de memoria compartida
-      "--js-flags='--max-old-space-size=256'", // Limita el motor V8 para no comerse la RAM
-      "--single-process",              // Corre todo en un solo hilo (ahorra CPU y RAM)
+      "--js-flags=--max-old-space-size=256", // Limita el motor V8 para no comerse la RAM
       "--no-zygote",                   // Evita procesos hijos pesados
 
       "--disable-accelerated-2d-canvas",
@@ -44,7 +42,7 @@ const client = new Client({
       "--disable-backgrounding-occluded-windows",
       "--disable-renderer-backgrounding",
       
-      "--proxy-server='direct://'",
+      "--proxy-server=direct://",
       "--proxy-bypass-list=*"
 ],
   },
@@ -183,9 +181,6 @@ client.on("message_reaction", async (reaction) => {
 let isSynced = false; 
 // ───── HANDLER DE MENSAJES ─────────────────────
 async function processMessage(message) {
-  // Filtro de mensajes antiguos (Backlog)
-  if (message.timestamp < startupTime) return;
-
   if (!isSynced) {
     isSynced = true;
     console.log("\n" + "=".repeat(45));
