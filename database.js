@@ -45,7 +45,7 @@ db.exec(`
     weekly_credits      INTEGER DEFAULT 20000,
     game_schedule       TEXT DEFAULT '20:00',
     game_days          TEXT DEFAULT '1,3,5',
-    min_bet             INTEGER DEFAULT 10,
+    min_bet             INTEGER DEFAULT 100,
     max_bet             INTEGER DEFAULT 500,
     auto_payout         INTEGER DEFAULT 1,
     FOREIGN KEY (group_id) REFERENCES groups(group_id)
@@ -207,7 +207,7 @@ function updateGroupSettings(groupId, settings) {
     settings.weekly_credits || DEFAULT_WEEKLY_CREDITS,
     settings.game_schedule || '20:00',
     settings.game_days || '1,3,5',
-    settings.min_bet || 10,
+    settings.min_bet || 100,
     settings.max_bet || 500,
     settings.auto_payout !== undefined ? settings.auto_payout : 1,
     groupId
@@ -475,7 +475,7 @@ function calculateBetPayout(betType, betValue, winningNumber, winningColor) {
   
   switch (betType) {
     case 'number':
-      return winInfo.value === parseInt(betValue) ? 36 : 0;
+      return winInfo.value === parseInt(betValue) ? 35 : 0;
     case 'red':
       return winInfo.color === 'red' ? 2 : 0;
     case 'black':
