@@ -35,7 +35,7 @@ const HELP_TEXT = `
 
 // ─── UTILS ────────────────────────────────────────────────────────────────────
 const ADMIN_GROUP_ID = process.env.ADMIN_GROUP_ID || "";
-const SUPER_ADMINS = ["5491100000000", "541100000000", "100000000000000"];
+const SUPER_ADMINS = (process.env.SUPER_ADMINS || "").split(",").map((s) => s.trim()).filter(Boolean);
 
 async function isAdmin(message, client) {
   try {
